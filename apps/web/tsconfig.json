@@ -1,0 +1,15 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["./*"] ,
+      "@cert-registry/domain": ["../../packages/domain/src"],
+      "@cert-registry/cert-renderer": ["../../packages/cert-renderer/src"],
+      "@cert-registry/verify-widget": ["../../packages/verify-widget/src"]
+    },
+    "types": ["node"]
+  },
+  "include": ["next-env.d.ts", "**/*.ts", "**/*.tsx"],
+  "exclude": ["node_modules"]
+}
