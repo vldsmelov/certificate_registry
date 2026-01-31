@@ -68,7 +68,7 @@ services:
       - "3001:3000"
 
   realtime:
-    image: supabase/realtime:v2.29.25
+    image: supabase/realtime:latest
     container_name: supabase-realtime
     restart: unless-stopped
     depends_on:
@@ -81,6 +81,7 @@ services:
       DB_PASSWORD: postgres
       DB_NAME: postgres
       JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
+      RLIMIT_NOFILE: "1048576"
     ports:
       - "4000:4000"
 
@@ -103,6 +104,7 @@ services:
       JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
       ANON_KEY: ${SUPABASE_ANON_KEY:-test-anon-key}
       SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-test-service-key}
+      PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
     ports:
       - "5000:5000"
     volumes:
@@ -131,7 +133,11 @@ services:
   web:
     working_dir: /app
     image: node:20-alpine
-    command: sh -c "npm install && echo 'Frontend: http://localhost:3000' && npm --workspace apps/web run dev -- --hostname=0.0.0.0"
+    command: [
+      "sh",
+      "-c",
+      "npm install && echo 'Frontend: http://localhost:3000' && npm --workspace apps/web run dev -- --hostname=0.0.0.0",
+    ]
     ports:
       - "3000:3000"
     volumes:
