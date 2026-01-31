@@ -1,7 +1,7 @@
 import { NextRequest } from 'next/server';
 import { stringify } from 'csv-stringify/sync';
 import * as XLSX from 'xlsx';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { query } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { requirePermission } from '@/lib/rbac';
 import { Flags } from '@/lib/config';
@@ -17,41 +17,34 @@ export async function GET(request: NextRequest) {
     return new Response('XLSX export disabled', { status: 400 });
   }
 
-  const supabase = createSupabaseServerClient();
-  const { data, error } = await supabase
-    .from('certificate')
-    .select(
-      `
-      certificate_number,
-      public_id,
-      status,
-      issued_at,
-      valid_to,
-      validity_type,
-      exam_attempt:exam_attempt_id (
-        grade,
-        exam_date,
-        exam_type:exam_type_id (name)
-      )
+  const { rows } = await query<{
+    certificate_number: string;
+    public_id: string;
+    status: string;
+    issued_at: string;
+    valid_to: string | null;
+    validity_type: string;
+    grade: string | null;
+    exam_date: string | null;
+    exam_type: string | null;
+  }>(
     `
-    )
-    .order('issued_at', { ascending: false });
-
-  if (error) {
-    return new Response(error.message, { status: 500 });
-  }
-
-  const rows = (data ?? []).map((item) => ({
-    certificate_number: item.certificate_number,
-    public_id: item.public_id,
-    status: item.status,
-    issued_at: item.issued_at,
-    valid_to: item.valid_to,
-    validity_type: item.validity_type,
-    grade: item.exam_attempt?.grade,
-    exam_date: item.exam_attempt?.exam_date,
-    exam_type: item.exam_attempt?.exam_type?.name
-  }));
+    select
+      c.certificate_number,
+      c.public_id,
+      c.status,
+      c.issued_at,
+      c.valid_to,
+      c.validity_type,
+      ea.grade,
+      ea.exam_date,
+      et.name as exam_type
+    from certificate c
+    join exam_attempt ea on ea.id = c.exam_attempt_id
+    join exam_type et on et.id = ea.exam_type_id
+    order by c.issued_at desc
+    `
+  );
 
   if (format === 'xlsx') {
     const worksheet = XLSX.utils.json_to_sheet(rows);

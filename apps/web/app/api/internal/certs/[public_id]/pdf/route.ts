@@ -1,6 +1,8 @@
 import { NextRequest } from 'next/server';
 import { renderCertificatePdf } from '@cert-registry/cert-renderer';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import path from 'path';
+import { readFile } from 'fs/promises';
+import { query } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { requirePermission } from '@/lib/rbac';
 
@@ -8,45 +10,44 @@ export async function GET(request: NextRequest, { params }: { params: { public_i
   const session = getSession();
   requirePermission(session, 'certificate:view_internal');
 
-  const supabase = createSupabaseServerClient();
-  const { data: certificate, error } = await supabase
-    .from('certificate')
-    .select(
-      `
-      public_id,
-      certificate_number,
-      render_snapshot_json,
-      template_version_id,
-      template_version:template_version_id (
-        config_json,
-        background_path
-      )
+  const { rows } = await query<{
+    public_id: string;
+    certificate_number: string;
+    render_snapshot_json: Record<string, unknown>;
+    config_json: unknown | null;
+    background_path: string | null;
+  }>(
     `
-    )
-    .eq('public_id', params.public_id)
-    .maybeSingle();
+    select
+      c.public_id,
+      c.certificate_number,
+      c.render_snapshot_json,
+      tv.config_json,
+      tv.background_path
+    from certificate c
+    left join template_version tv on tv.id = c.template_version_id
+    where c.public_id = $1
+    limit 1
+    `,
+    [params.public_id]
+  );
 
-  if (error) {
-    return new Response(error.message, { status: 500 });
-  }
+  const certificate = rows[0];
   if (!certificate) {
     return new Response('Not found', { status: 404 });
   }
 
-  const template = certificate.template_version as {
-    config_json: unknown;
-    background_path: string | null;
-  } | null;
-
   let backgroundBytes: Uint8Array | null = null;
-  if (template?.background_path) {
-    const { data: backgroundData, error: bgError } = await supabase.storage
-      .from('templates')
-      .download(template.background_path);
-    if (bgError) {
-      return new Response(bgError.message, { status: 500 });
+  if (certificate.background_path) {
+    const baseDir = process.env.TEMPLATE_STORAGE_DIR ?? process.cwd();
+    const resolvedPath = path.isAbsolute(certificate.background_path)
+      ? certificate.background_path
+      : path.resolve(baseDir, certificate.background_path);
+    try {
+      backgroundBytes = new Uint8Array(await readFile(resolvedPath));
+    } catch (error) {
+      console.warn('Failed to read template background file', error);
     }
-    backgroundBytes = new Uint8Array(await backgroundData.arrayBuffer());
   }
 
   const baseUrl = request.nextUrl.origin;
@@ -65,7 +66,7 @@ export async function GET(request: NextRequest, { params }: { params: { public_i
 
   const pdfBytes = await renderCertificatePdf({
     snapshot: certificate.render_snapshot_json,
-    templateConfig: template?.config_json ?? fallbackConfig,
+    templateConfig: certificate.config_json ?? fallbackConfig,
     backgroundBytes,
     publicUrl
   });

@@ -1,4 +1,4 @@
-import { createSupabaseServerClient } from './supabase';
+import { query } from './db';
 
 export type InternalCertificate = {
   id: string;
@@ -24,34 +24,38 @@ export type InternalCertificate = {
 };
 
 export async function fetchInternalCertificate(publicId: string) {
-  const supabase = createSupabaseServerClient();
-  const { data, error } = await supabase
-    .from('certificate')
-    .select(
-      `
-      id,
-      public_id,
-      certificate_number,
-      status,
-      issued_at,
-      valid_to,
-      validity_type,
-      render_snapshot_json,
-      exam_attempt:exam_attempt_id (
-        grade,
-        exam_date,
-        signer_user_id,
-        person:person_id (full_name, position),
-        exam_type:exam_type_id (name)
-      )
+  const result = await query<InternalCertificate>(
     `
-    )
-    .eq('public_id', publicId)
-    .maybeSingle();
+    select
+      c.id,
+      c.public_id,
+      c.certificate_number,
+      c.status,
+      c.issued_at,
+      c.valid_to,
+      c.validity_type,
+      c.render_snapshot_json,
+      jsonb_build_object(
+        'grade', ea.grade,
+        'exam_date', ea.exam_date,
+        'signer_user_id', ea.signer_user_id,
+        'person', jsonb_build_object(
+          'full_name', p.full_name,
+          'position', p.position
+        ),
+        'exam_type', jsonb_build_object(
+          'name', et.name
+        )
+      ) as exam_attempt
+    from certificate c
+    join exam_attempt ea on ea.id = c.exam_attempt_id
+    join person p on p.id = ea.person_id
+    join exam_type et on et.id = ea.exam_type_id
+    where c.public_id = $1
+    limit 1
+    `,
+    [publicId]
+  );
 
-  if (error) {
-    throw error;
-  }
-
-  return data as InternalCertificate | null;
+  return (result.rows[0] ?? null) as InternalCertificate | null;
 }

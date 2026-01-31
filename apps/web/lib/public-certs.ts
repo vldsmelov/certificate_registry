@@ -1,4 +1,4 @@
-import { createSupabaseBrowserClient, createSupabaseServerClient } from './supabase';
+import { query } from './db';
 
 export type PublicCertificate = {
   public_id: string;
@@ -12,32 +12,10 @@ export type PublicCertificate = {
   signer_display_name: string | null;
 };
 
-export async function fetchPublicCertificate(publicId: string) {
-  const supabase = createSupabaseBrowserClient();
-  const { data, error } = await supabase
-    .from('public_certificate_check')
-    .select('*')
-    .eq('public_id', publicId)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return data as PublicCertificate | null;
-}
-
 export async function fetchPublicCertificateServer(publicId: string) {
-  const supabase = createSupabaseServerClient();
-  const { data, error } = await supabase
-    .from('public_certificate_check')
-    .select('*')
-    .eq('public_id', publicId)
-    .maybeSingle();
-
-  if (error) {
-    throw error;
-  }
-
-  return data as PublicCertificate | null;
+  const result = await query<PublicCertificate>(
+    `select * from public_certificate_check where public_id = $1 limit 1`,
+    [publicId]
+  );
+  return result.rows[0] ?? null;
 }

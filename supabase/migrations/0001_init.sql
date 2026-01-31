@@ -8,7 +8,7 @@ create type certificate_status as enum ('issued', 'revoked', 'annulled');
 create type notification_status as enum ('pending', 'sent', 'failed');
 
 create table user_profile (
-  user_id uuid primary key references auth.users(id) on delete cascade,
+  user_id uuid primary key default gen_random_uuid(),
   display_name text not null,
   email text not null,
   is_active boolean not null default true
@@ -31,7 +31,7 @@ create table role_permission (
 );
 
 create table user_role (
-  user_id uuid references auth.users(id) on delete cascade,
+  user_id uuid references user_profile(user_id) on delete cascade,
   role_id uuid references role(id) on delete cascade,
   primary key (user_id, role_id)
 );
@@ -43,7 +43,7 @@ create table person (
   employee_code text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  created_by uuid references auth.users(id)
+  created_by uuid references user_profile(user_id)
 );
 
 create table exam_type (
@@ -65,8 +65,8 @@ create table exam_attempt (
   grade exam_grade not null,
   exam_date date not null,
   status exam_status not null default 'draft',
-  signer_user_id uuid references auth.users(id),
-  created_by uuid references auth.users(id),
+  signer_user_id uuid references user_profile(user_id),
+  created_by uuid references user_profile(user_id),
   notes text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -76,7 +76,7 @@ create table exam_attempt (
 create table approval (
   id uuid primary key default gen_random_uuid(),
   exam_attempt_id uuid references exam_attempt(id) on delete cascade,
-  signer_user_id uuid references auth.users(id),
+  signer_user_id uuid references user_profile(user_id),
   status approval_status not null default 'pending',
   decided_at timestamptz,
   reason text,
@@ -89,7 +89,7 @@ create table template (
   description text,
   is_archived boolean not null default false,
   created_at timestamptz not null default now(),
-  created_by uuid references auth.users(id)
+  created_by uuid references user_profile(user_id)
 );
 
 create table template_version (
@@ -100,7 +100,7 @@ create table template_version (
   background_path text,
   config_json jsonb not null,
   created_at timestamptz not null default now(),
-  created_by uuid references auth.users(id),
+  created_by uuid references user_profile(user_id),
   unique (template_id, version)
 );
 
@@ -120,17 +120,17 @@ create table certificate (
   validity_months int,
   status certificate_status not null default 'issued',
   revoked_at timestamptz,
-  revoked_by uuid references auth.users(id),
+  revoked_by uuid references user_profile(user_id),
   revoke_reason text,
   template_version_id uuid references template_version(id),
   render_snapshot_json jsonb not null,
   created_at timestamptz not null default now(),
-  created_by uuid references auth.users(id)
+  created_by uuid references user_profile(user_id)
 );
 
 create table audit_log (
   id uuid primary key default gen_random_uuid(),
-  actor_user_id uuid references auth.users(id),
+  actor_user_id uuid references user_profile(user_id),
   action text not null,
   entity_type text not null,
   entity_id uuid,
@@ -214,117 +214,3 @@ from certificate
 join exam_attempt on exam_attempt.id = certificate.exam_attempt_id
 join exam_type on exam_type.id = exam_attempt.exam_type_id
 left join user_profile on user_profile.user_id = exam_attempt.signer_user_id;
-
-alter table user_profile enable row level security;
-alter table role enable row level security;
-alter table permission enable row level security;
-alter table role_permission enable row level security;
-alter table user_role enable row level security;
-alter table person enable row level security;
-alter table exam_type enable row level security;
-alter table exam_attempt enable row level security;
-alter table approval enable row level security;
-alter table template enable row level security;
-alter table template_version enable row level security;
-alter table certificate enable row level security;
-alter table audit_log enable row level security;
-alter table notification_outbox enable row level security;
-
-create policy "anon_select_public_check" on certificate
-  for select
-  to anon
-  using (true);
-
-create policy "anon_select_public_attempt" on exam_attempt
-  for select
-  to anon
-  using (true);
-
-create policy "anon_select_public_exam_type" on exam_type
-  for select
-  to anon
-  using (true);
-
-create policy "anon_select_public_user_profile" on user_profile
-  for select
-  to anon
-  using (true);
-
-create policy "auth_full_access_user_profile" on user_profile
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy "auth_full_access_certificate" on certificate
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy "auth_full_access_exam_attempt" on exam_attempt
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy "auth_full_access_exam_type" on exam_type
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy "auth_full_access_template" on template
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy "auth_full_access_template_version" on template_version
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy "auth_full_access_approval" on approval
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy "auth_full_access_person" on person
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy "auth_full_access_audit_log" on audit_log
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-create policy "auth_full_access_notification_outbox" on notification_outbox
-  for all
-  to authenticated
-  using (true)
-  with check (true);
-
-revoke all on certificate from anon;
-revoke all on exam_attempt from anon;
-revoke all on exam_type from anon;
-revoke all on user_profile from anon;
-
-grant select (public_id, certificate_number, exam_attempt_id, issued_at, valid_to, validity_type, status)
-  on certificate to anon;
-
-grant select (id, exam_type_id, grade, signer_user_id)
-  on exam_attempt to anon;
-
-grant select (id, name)
-  on exam_type to anon;
-
-grant select (user_id, display_name)
-  on user_profile to anon;
-
-grant select on public_certificate_check to anon;

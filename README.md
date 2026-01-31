@@ -12,38 +12,30 @@ packages/verify-widget# публичный виджет проверки
 supabase/             # миграции, RLS, функции
 ```
 
-## Локальный запуск
-### 1) Запуск всего стека одной командой (Supabase + Web)
+## Локальный запуск (PostgreSQL + Web в Docker)
+### 1) Запуск стека одной командой
 ```
- docker compose up --build
+docker compose up --build
 ```
-В логах появится ссылка на фронтенд: `Frontend: http://localhost:3000`.
 
-> Этот compose поднимает Supabase stack, применяет миграции автоматически и запускает Next.js.
+Compose поднимет PostgreSQL, применит миграции и запустит веб-приложение.
+
+Откройте `http://localhost:3000`.
 
 ## Env vars
 ```
-NEXT_PUBLIC_SUPABASE_URL=
-NEXT_PUBLIC_SUPABASE_ANON_KEY=
-SUPABASE_SERVICE_ROLE_KEY=
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/certificate_registry
+TEMPLATE_STORAGE_DIR=./template-assets
 PUBLIC_PDF_DOWNLOAD=false
 ENABLE_XLSX_EXPORT=true
 ENABLE_EMAILS=false
 RESEND_API_KEY=
 ```
 
-## Деплой
-### Vercel
-1. Создайте новый проект и подключите репозиторий.
-2. Укажите переменные окружения из списка выше.
-3. Для API routes используйте `SUPABASE_SERVICE_ROLE_KEY` (server-only).
+`TEMPLATE_STORAGE_DIR` — папка, в которой лежат фоновые файлы шаблонов (значения `background_path` в таблице `template_version`).
 
-### Supabase
-1. Создайте проект.
-2. Импортируйте миграции из `supabase/migrations`.
-3. Настройте redirect URLs для Auth:
-   - `http://localhost:3000`
-   - `https://<your-vercel-domain>`
+## Деплой
+Пока не рассматривается — проект рассчитан на локальный запуск с PostgreSQL.
 
 ## Безопасность
 - Внешний контур читает только `public_certificate_check` без ПДн.

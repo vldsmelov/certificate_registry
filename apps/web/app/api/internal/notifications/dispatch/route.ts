@@ -1,5 +1,5 @@
 import { NextRequest } from 'next/server';
-import { createSupabaseServerClient } from '@/lib/supabase';
+import { query } from '@/lib/db';
 import { getSession } from '@/lib/session';
 import { requirePermission } from '@/lib/rbac';
 import { Flags } from '@/lib/config';
@@ -9,17 +9,20 @@ export async function POST(_request: NextRequest) {
   const session = getSession();
   requirePermission(session, 'notifications:dispatch');
 
-  const supabase = createSupabaseServerClient();
-  const { data, error } = await supabase
-    .from('notification_outbox')
-    .select('*')
-    .eq('status', 'pending')
-    .order('created_at', { ascending: true })
-    .limit(10);
-
-  if (error) {
-    return new Response(error.message, { status: 500 });
-  }
+  const { rows } = await query<{
+    id: string;
+    event_type: string;
+    payload_json: { to?: string; subject?: string; html?: string };
+    attempts_count: number;
+  }>(
+    `
+    select id, event_type, payload_json, attempts_count
+    from notification_outbox
+    where status = 'pending'
+    order by created_at asc
+    limit 10
+    `
+  );
 
   const provider = Flags.enableEmails && process.env.RESEND_API_KEY
     ? new ResendProvider(process.env.RESEND_API_KEY)
@@ -27,7 +30,7 @@ export async function POST(_request: NextRequest) {
 
   let processed = 0;
 
-  for (const item of data ?? []) {
+  for (const item of rows ?? []) {
     try {
       await provider.send({
         to: item.payload_json.to ?? 'ops@example.com',
@@ -35,21 +38,31 @@ export async function POST(_request: NextRequest) {
         html: item.payload_json.html ?? '<p>Notification</p>'
       });
 
-      await supabase
-        .from('notification_outbox')
-        .update({ status: 'sent', attempts_count: item.attempts_count + 1 })
-        .eq('id', item.id);
+      await query(
+        `
+        update notification_outbox
+        set status = 'sent', attempts_count = $1
+        where id = $2
+        `,
+        [item.attempts_count + 1, item.id]
+      );
 
       processed += 1;
     } catch (sendError) {
-      await supabase
-        .from('notification_outbox')
-        .update({
-          status: 'failed',
-          attempts_count: item.attempts_count + 1,
-          last_error: sendError instanceof Error ? sendError.message : 'Unknown error'
-        })
-        .eq('id', item.id);
+      await query(
+        `
+        update notification_outbox
+        set status = 'failed',
+            attempts_count = $1,
+            last_error = $2
+        where id = $3
+        `,
+        [
+          item.attempts_count + 1,
+          sendError instanceof Error ? sendError.message : 'Unknown error',
+          item.id
+        ]
+      );
     }
   }
 
