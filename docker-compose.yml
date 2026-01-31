@@ -1,17 +1,149 @@
-version: '3.9'
 services:
+  db:
+    image: supabase/postgres:15.1.0.117
+    container_name: supabase-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "54322:5432"
+    volumes:
+      - supabase_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  db-migrate:
+    image: postgres:15
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - ./supabase/migrations:/migrations:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command: >
+      "if psql -h db -U postgres -d postgres -tAc \"select 1 from pg_catalog.pg_tables where schemaname='public' and tablename='certificate'\" | grep -q 1; then
+        echo 'Migrations already applied.';
+      else
+        echo 'Applying migrations...';
+        psql -h db -U postgres -d postgres -v ON_ERROR_STOP=1 -f /migrations/0001_init.sql;
+      fi"
+    environment:
+      PGPASSWORD: postgres
+
+  auth:
+    image: supabase/gotrue:v2.158.1
+    container_name: supabase-auth
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      GOTRUE_DB_DRIVER: postgres
+      GOTRUE_DB_DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
+      GOTRUE_SITE_URL: http://localhost:3000
+      GOTRUE_API_EXTERNAL_URL: http://localhost:54321
+      GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
+      GOTRUE_JWT_EXP: 3600
+      GOTRUE_DISABLE_SIGNUP: "false"
+    ports:
+      - "9999:9999"
+
+  rest:
+    image: postgrest/postgrest:v12.2.3
+    container_name: supabase-rest
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGRST_DB_URI: postgres://postgres:postgres@db:5432/postgres
+      PGRST_DB_ANON_ROLE: anon
+      PGRST_DB_SCHEMAS: public
+      PGRST_JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
+    ports:
+      - "3001:3000"
+
+  realtime:
+    image: supabase/realtime:v2.29.25
+    container_name: supabase-realtime
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_USER: postgres
+      DB_PASSWORD: postgres
+      DB_NAME: postgres
+      JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
+    ports:
+      - "4000:4000"
+
+  storage:
+    image: supabase/storage-api:v1.17.0
+    container_name: supabase-storage
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
+      FILE_SIZE_LIMIT: 52428800
+      STORAGE_BACKEND: file
+      FILE_STORAGE_BACKEND_PATH: /var/lib/storage
+      TENANT_ID: stub
+      REGION: stub
+      GLOBAL_S3_BUCKET: stub
+      GLOBAL_S3_ENDPOINT: stub
+      JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
+      ANON_KEY: ${SUPABASE_ANON_KEY:-test-anon-key}
+      SERVICE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-test-service-key}
+    ports:
+      - "5000:5000"
+    volumes:
+      - supabase_storage_data:/var/lib/storage
+
+  kong:
+    image: kong:2.8
+    container_name: supabase-kong
+    restart: unless-stopped
+    depends_on:
+      - auth
+      - rest
+      - storage
+    environment:
+      KONG_DATABASE: "off"
+      KONG_DECLARATIVE_CONFIG: /usr/local/kong/kong.yml
+      KONG_PROXY_ACCESS_LOG: /dev/stdout
+      KONG_ADMIN_ACCESS_LOG: /dev/stdout
+      KONG_PROXY_ERROR_LOG: /dev/stderr
+      KONG_ADMIN_ERROR_LOG: /dev/stderr
+    ports:
+      - "54321:8000"
+    volumes:
+      - ./supabase-kong.yml:/usr/local/kong/kong.yml:ro
+
   web:
     working_dir: /app
     image: node:20-alpine
-    command: sh -c "npm install && npm run dev -- --hostname 0.0.0.0"
+    command: sh -c "npm install && echo 'Frontend: http://localhost:3000' && npm --workspace apps/web run dev -- --hostname=0.0.0.0"
     ports:
       - "3000:3000"
     volumes:
       - ./:/app
     environment:
       - NEXT_PUBLIC_SUPABASE_URL=http://localhost:54321
-      - NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
-      - SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+      - NEXT_PUBLIC_SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-test-anon-key}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-test-service-key}
       - PUBLIC_PDF_DOWNLOAD=false
       - ENABLE_XLSX_EXPORT=true
       - ENABLE_EMAILS=false
+
+volumes:
+  supabase_db_data:
+  supabase_storage_data:

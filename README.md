@@ -13,21 +13,13 @@ supabase/             # миграции, RLS, функции
 ```
 
 ## Локальный запуск
-### 1) Supabase
-Используйте Supabase CLI:
-```
- supabase start
-```
-Примените миграции:
-```
- supabase db reset
-```
-
-### 2) Web
+### 1) Запуск всего стека одной командой (Supabase + Web)
 ```
  docker compose up
 ```
-Приложение будет доступно на `http://localhost:3000`.
+В логах появится ссылка на фронтенд: `Frontend: http://localhost:3000`.
+
+> Этот compose поднимает Supabase stack, применяет миграции автоматически и запускает Next.js.
 
 ## Env vars
 ```
