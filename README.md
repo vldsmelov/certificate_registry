@@ -15,7 +15,7 @@ supabase/             # миграции, RLS, функции
 ## Локальный запуск
 ### 1) Запуск всего стека одной командой (Supabase + Web)
 ```
- docker compose up
+ docker compose up --build
 ```
 В логах появится ссылка на фронтенд: `Frontend: http://localhost:3000`.
 

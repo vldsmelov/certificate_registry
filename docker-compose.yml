@@ -37,7 +37,10 @@ services:
       PGPASSWORD: postgres
 
   auth:
-    image: supabase/gotrue:v2.158.1
+    build:
+      context: .
+      dockerfile: supabase/gotrue/Dockerfile
+    image: supabase/gotrue:v2.158.1-patched
     container_name: supabase-auth
     restart: unless-stopped
     depends_on:
@@ -90,6 +93,9 @@ services:
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: postgres
+      DB_SCHEMA: realtime
+      DB_MIGRATIONS_SCHEMA: realtime
+      DB_AFTER_CONNECT_QUERY: "SET search_path TO realtime, public"
       APP_NAME: realtime
       JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
       SECRET_KEY_BASE: ${SUPABASE_SECRET_KEY_BASE:-super-secret-key-base}
