@@ -25,7 +25,9 @@ services:
       - ./supabase/migrations:/migrations:ro
     entrypoint: ["/bin/sh", "-c"]
     command: >
-      "if psql -h db -U postgres -d postgres -tAc \"select 1 from pg_catalog.pg_tables where schemaname='public' and tablename='certificate'\" | grep -q 1; then
+      "echo 'Applying bootstrap...';
+      psql -h db -U postgres -d postgres -v ON_ERROR_STOP=1 -f /migrations/0000_bootstrap.sql;
+      if psql -h db -U postgres -d postgres -tAc \"select 1 from pg_catalog.pg_tables where schemaname='public' and tablename='certificate'\" | grep -q 1; then
         echo 'Migrations already applied.';
       else
         echo 'Applying migrations...';
@@ -41,11 +43,15 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       GOTRUE_DB_DRIVER: postgres
       GOTRUE_DB_DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
       GOTRUE_SITE_URL: http://localhost:3000
       GOTRUE_API_EXTERNAL_URL: http://localhost:54321
+      API_EXTERNAL_URL: http://localhost:54321
+      GOTRUE_DB_USE_LEGACY_SCHEMA: "true"
       GOTRUE_JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
       GOTRUE_JWT_EXP: 3600
       GOTRUE_DISABLE_SIGNUP: "false"
@@ -59,6 +65,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       PGRST_DB_URI: postgres://postgres:postgres@db:5432/postgres
       PGRST_DB_ANON_ROLE: anon
@@ -74,13 +82,17 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       DB_HOST: db
       DB_PORT: 5432
       DB_USER: postgres
       DB_PASSWORD: postgres
       DB_NAME: postgres
+      APP_NAME: realtime
       JWT_SECRET: ${SUPABASE_JWT_SECRET:-super-secret-jwt}
+      SECRET_KEY_BASE: ${SUPABASE_SECRET_KEY_BASE:-super-secret-key-base}
       RLIMIT_NOFILE: "1048576"
     ports:
       - "4000:4000"
@@ -92,6 +104,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgres://postgres:postgres@db:5432/postgres
       FILE_SIZE_LIMIT: 52428800
