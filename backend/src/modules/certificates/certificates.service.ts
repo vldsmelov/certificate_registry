@@ -20,6 +20,174 @@ function addMonths(date: Date, months: number): Date {
 export class CertificatesService {
   constructor(private readonly prisma: PrismaService) {}
 
+  async listInternal(params: {
+    q?: string;
+    status?: string;
+    grade?: string;
+    examTypeId?: string;
+    signerUserId?: string;
+    issuedFrom?: Date | null;
+    issuedTo?: Date | null;
+    examFrom?: Date | null;
+    examTo?: Date | null;
+    validity?: string;
+    page: number;
+    pageSize: number;
+    forExport?: boolean;
+  }) {
+    const now = new Date();
+    const {
+      q,
+      status,
+      grade,
+      examTypeId,
+      signerUserId,
+      issuedFrom,
+      issuedTo,
+      examFrom,
+      examTo,
+      validity,
+      page,
+      pageSize,
+    } = params;
+
+    const where: Prisma.CertificateWhereInput = {};
+    const and: Prisma.CertificateWhereInput[] = [];
+
+    // Grade
+    if (grade && ['gold', 'silver', 'fail'].includes(grade)) {
+      where.grade = grade as any;
+    }
+
+    // Status / validity
+    const wantsExpired = (status === 'expired') || (validity === 'expired');
+    const wantsActive = validity === 'active';
+
+    if (status && ['issued', 'revoked', 'annulled'].includes(status)) {
+      where.status = status as any;
+    }
+
+    if (wantsExpired) {
+      // Expired is a computed status: issued + validTo < now
+      where.status = 'issued' as any;
+      where.validTo = { lt: now };
+    } else if (wantsActive) {
+      // Active: issued + (validTo is null OR validTo >= now)
+      where.status = 'issued' as any;
+      and.push({ OR: [{ validTo: null }, { validTo: { gte: now } }] });
+    }
+
+    // Dates
+    if (issuedFrom || issuedTo) {
+      where.issuedAt = {
+        ...(issuedFrom ? { gte: issuedFrom } : {}),
+        ...(issuedTo ? { lte: issuedTo } : {}),
+      };
+    }
+
+    // Relations filters
+    const attemptWhere: Prisma.ExamAttemptWhereInput = {};
+    if (examTypeId) attemptWhere.examTypeId = examTypeId;
+    if (signerUserId) attemptWhere.signerUserId = signerUserId;
+    if (examFrom || examTo) {
+      attemptWhere.examDate = {
+        ...(examFrom ? { gte: examFrom } : {}),
+        ...(examTo ? { lte: examTo } : {}),
+      };
+    }
+
+    if (Object.keys(attemptWhere).length > 0) {
+      where.examAttempt = { is: attemptWhere };
+    }
+
+    // Search
+    const qNorm = (q ?? '').trim();
+    if (qNorm) {
+      and.push({
+        OR: [
+          { certificateNumber: { contains: qNorm, mode: 'insensitive' } },
+          { publicId: { contains: qNorm, mode: 'insensitive' } },
+          {
+            examAttempt: {
+              is: {
+                person: {
+                  is: {
+                    OR: [
+                      { fullName: { contains: qNorm, mode: 'insensitive' } },
+                      { position: { contains: qNorm, mode: 'insensitive' } },
+                      { employeeCode: { contains: qNorm, mode: 'insensitive' } },
+                    ],
+                  },
+                },
+              },
+            },
+          },
+        ],
+      });
+    }
+
+    if (and.length > 0) {
+      where.AND = and;
+    }
+
+    const skip = (page - 1) * pageSize;
+
+    const [total, rows] = await this.prisma.$transaction([
+      this.prisma.certificate.count({ where }),
+      this.prisma.certificate.findMany({
+        where,
+        orderBy: [{ issuedAt: 'desc' }, { createdAt: 'desc' }],
+        skip,
+        take: pageSize,
+        include: {
+          examAttempt: {
+            include: {
+              person: true,
+              examType: true,
+              signerUser: { select: { id: true, email: true, displayName: true } },
+            },
+          },
+        },
+      }),
+    ]);
+
+    const items = rows.map((c) => {
+      const expired = c.validTo ? now > c.validTo : false;
+      const signerName = c.examAttempt.signerUser ? (c.examAttempt.signerUser.displayName ?? c.examAttempt.signerUser.email) : null;
+      return {
+        certificateNumber: c.certificateNumber,
+        publicId: c.publicId,
+        grade: c.grade,
+        status: c.status,
+        issuedAt: c.issuedAt,
+        validTo: c.validTo,
+        expired,
+        revokedAt: c.revokedAt,
+        revokeReason: c.revokeReason,
+        person: {
+          fullName: c.examAttempt.person.fullName,
+          position: c.examAttempt.person.position,
+          employeeCode: c.examAttempt.person.employeeCode,
+        },
+        examType: {
+          id: c.examAttempt.examType.id,
+          name: c.examAttempt.examType.name,
+          code: c.examAttempt.examType.code,
+        },
+        examDate: c.examAttempt.examDate,
+        attemptNo: c.examAttempt.attemptNo,
+        signerName,
+      };
+    });
+
+    return {
+      page,
+      pageSize,
+      total,
+      items,
+    };
+  }
+
   /**
    * Issue (create) a certificate for an approved attempt.
    * Idempotent: if certificate already exists for attempt, returns it.

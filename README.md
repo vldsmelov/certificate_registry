@@ -106,7 +106,15 @@ New env vars:
 
 ## Next iterations
 
-5) Export (CSV/XLSX) + advanced filters/search
+### Iteration 5: Certificate registry (filters/search) + CSV export ✅
+
+- **Registry list**:
+  - `GET /api/internal/certificates` (JWT + `certificate:view_internal`)
+    - supports: `q`, `status` (issued/revoked/annulled/expired), `grade`, `examTypeId`, `validity` (active/expired), `issuedFrom/issuedTo`, `examFrom/examTo`, `page`, `pageSize`
+- **CSV export** (same filters):
+  - `GET /api/internal/certificates/export.csv` (JWT + `export:run`)
+    - limit: 5000 rows per export
+
 6) Notifications (Outbox + email provider)
 
 ## Notes

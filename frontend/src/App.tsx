@@ -74,6 +74,30 @@ type ApprovalInboxItem = {
   };
 };
 
+type CertificateListItem = {
+  certificateNumber: string;
+  publicId: string;
+  status: string;
+  grade: string;
+  issuedAt: string;
+  validTo: string | null;
+  expired: boolean;
+  revokedAt: string | null;
+  revokeReason: string | null;
+  person: { fullName: string; position: string; employeeCode: string | null };
+  examType: { id: string; name: string; code: string };
+  examDate: string;
+  attemptNo: number;
+  signerName: string | null;
+};
+
+type CertificateListResponse = {
+  page: number;
+  pageSize: number;
+  total: number;
+  items: CertificateListItem[];
+};
+
 function hasPerm(me: AuthMe | null, code: string) {
   return !!me?.permissions?.includes(code);
 }
@@ -99,12 +123,66 @@ export default function App() {
   const [templateVersions, setTemplateVersions] = useState<TemplateVersionActive[]>([]);
   const [templatesAdmin, setTemplatesAdmin] = useState<TemplateAdmin[]>([]);
 
+  // Certificates registry
+  const [certRegistry, setCertRegistry] = useState<CertificateListResponse | null>(null);
+  const [certQ, setCertQ] = useState('');
+  const [certStatus, setCertStatus] = useState('');
+  const [certGrade, setCertGrade] = useState('');
+  const [certExamTypeId, setCertExamTypeId] = useState('');
+  const [certValidity, setCertValidity] = useState('');
+  const [certIssuedFrom, setCertIssuedFrom] = useState('');
+  const [certIssuedTo, setCertIssuedTo] = useState('');
+
   // UI errors
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
 
   const [selectedCert, setSelectedCert] = useState<CertInternalView | null>(null);
   const [selectedCertPublicId, setSelectedCertPublicId] = useState<string | null>(null);
+
+
+// Tabs (UI)
+const availableTabs = useMemo(() => {
+  const t: { key: string; label: string; require?: string }[] = [];
+  // Default internal tab
+  t.push({ key: 'exams', label: 'Экзамены' });
+  if (me && hasPerm(me, 'approval:review')) t.push({ key: 'approvals', label: 'Подписи' });
+  if (me && hasPerm(me, 'certificate:view_internal')) t.push({ key: 'certs', label: 'Сертификаты' });
+  if (me && hasPerm(me, 'templates:manage')) t.push({ key: 'templates', label: 'Шаблоны' });
+  return t;
+}, [me]);
+
+const [activeTab, setActiveTab] = useState<string>('exams');
+
+useEffect(() => {
+  if (!token || !me) return;
+  if (availableTabs.length === 0) return;
+  if (!availableTabs.some((x) => x.key === activeTab)) {
+    setActiveTab(availableTabs[0].key);
+  }
+}, [token, me, availableTabs, activeTab]);
+
+function fmtDate(v?: string | null) {
+  if (!v) return '—';
+  const d = new Date(v);
+  return d.toLocaleDateString('ru-RU');
+}
+
+function gradeBadge(g: string) {
+  const gg = (g || '').toLowerCase();
+  if (gg === 'gold') return { text: 'Gold', cls: 'warning' };
+  if (gg === 'silver') return { text: 'Silver', cls: 'neutral' };
+  if (gg === 'fail') return { text: 'Не сдал', cls: 'danger' };
+  return { text: g, cls: 'info' };
+}
+
+function certStatusBadge(status: string, expired?: boolean) {
+  if (status === 'revoked') return { text: 'Отозван', cls: 'danger' };
+  if (status === 'annulled') return { text: 'Аннулирован', cls: 'danger' };
+  if (expired) return { text: 'Истёк', cls: 'warning' };
+  return { text: 'Действует', cls: 'success' };
+}
+
 
   async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${apiUrl}${path}`, {
@@ -188,8 +266,13 @@ export default function App() {
         .catch(() => setApprovals([]));
     } else {
       setApprovals([]);
-    setTemplateVersions([]);
-    setTemplatesAdmin([]);
+    }
+
+    // Certificates registry (internal)
+    if (hasPerm(me, 'certificate:view_internal')) {
+      refreshCerts(1);
+    } else {
+      setCertRegistry(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, me?.id]);
@@ -226,6 +309,7 @@ export default function App() {
     setApprovals([]);
     setTemplateVersions([]);
     setTemplatesAdmin([]);
+    setCertRegistry(null);
   }
 
   async function refreshMine() {
@@ -234,6 +318,60 @@ export default function App() {
       setAttempts(await apiFetch<Attempt[]>('/attempts/mine'));
     } catch {
       /* ignore */
+    }
+  }
+
+  function buildCertQuery(page: number = 1) {
+    const p = new URLSearchParams();
+    if (certQ.trim()) p.set('q', certQ.trim());
+    if (certStatus) p.set('status', certStatus);
+    if (certGrade) p.set('grade', certGrade);
+    if (certExamTypeId) p.set('examTypeId', certExamTypeId);
+    if (certValidity) p.set('validity', certValidity);
+    if (certIssuedFrom) p.set('issuedFrom', certIssuedFrom);
+    if (certIssuedTo) p.set('issuedTo', certIssuedTo);
+    p.set('page', String(page));
+    p.set('pageSize', '20');
+    return p.toString();
+  }
+
+  async function refreshCerts(page: number = 1) {
+    if (!token) return;
+    try {
+      const qs = buildCertQuery(page);
+      const res = await apiFetch<CertificateListResponse>(`/api/internal/certificates?${qs}`);
+      setCertRegistry(res);
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+      setCertRegistry(null);
+    }
+  }
+
+  async function exportCsv() {
+    if (!token) return;
+    try {
+      const qs = buildCertQuery(1);
+      const res = await fetch(`${apiUrl}/api/internal/certificates/export.csv?${qs}`, {
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      const blob = await res.blob();
+      const cd = res.headers.get('content-disposition') ?? '';
+      const m = /filename="?([^";]+)"?/i.exec(cd);
+      const filename = m?.[1] ?? 'certificates.csv';
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      flashOk('CSV экспортирован');
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
     }
   }
 
@@ -499,382 +637,815 @@ export default function App() {
       setActionErr(String(e?.message ?? e));
     }
   }
+
   return (
-    <div style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 980 }}>
-      <h1>Реестр сертификатов — прототип</h1>
+    <div className="layout">
+      <header className="header">
+        <div className="header-inner">
+          <div className="brand" role="banner">
+            <div className="logo" aria-hidden="true" />
+            <div>
+              <div className="brand-title">Реестр сертификатов</div>
+              <div className="brand-sub">прототип • внутренний/внешний контур</div>
+            </div>
+          </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
-        <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
-          <h2 style={{ marginTop: 0 }}>Backend health</h2>
-          {healthErr && <pre style={{ background: '#fee', padding: 12 }}>Ошибка: {healthErr}</pre>}
-          {!health && !healthErr && <p>Загружаю...</p>}
-          {health && <pre style={{ background: '#fff', padding: 12, borderRadius: 8 }}>{JSON.stringify(health, null, 2)}</pre>}
-        </section>
-
-        <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
-          <h2 style={{ marginTop: 0 }}>Auth</h2>
-
-          {!token && (
-            <form onSubmit={onLogin} style={{ display: 'grid', gap: 10, maxWidth: 520 }}>
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                <button type="button" onClick={() => { setLoginEmail('admin@example.com'); setLoginPassword('admin123'); }}>
-                  Admin
+          {token && me ? (
+            <nav className="tabs" aria-label="Разделы">
+              {availableTabs.map((t) => (
+                <button
+                  key={t.key}
+                  className={`tab ${activeTab === t.key ? 'active' : ''}`}
+                  onClick={() => setActiveTab(t.key)}
+                  type="button"
+                >
+                  {t.label}
                 </button>
-                <button type="button" onClick={() => { setLoginEmail('creator@example.com'); setLoginPassword('creator123'); }}>
-                  Creator
-                </button>
-                <button type="button" onClick={() => { setLoginEmail('signer@example.com'); setLoginPassword('signer123'); }}>
-                  Signer
-                </button>
-              </div>
-
-              <label>
-                Email
-                <input value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
-              </label>
-              <label>
-                Пароль
-                <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
-              </label>
-              <button type="submit" style={{ padding: '8px 12px' }}>
-                Войти
-              </button>
-              {authErr && <div style={{ color: '#b00020' }}>Ошибка: {authErr}</div>}
-              <div style={{ fontSize: 13, opacity: 0.8 }}>
-                Пользователи создаются при старте backend (см. <code>.env</code>).
-              </div>
-            </form>
+              ))}
+            </nav>
+          ) : (
+            <div className="spacer" />
           )}
 
-          {token && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-                <div>
-                  Вы вошли как: <b>{me?.displayName ?? me?.email ?? '...'}</b>
-                  {me && (
-                    <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>
-                      Permissions: {me.permissions.join(', ')}
-                    </div>
-                  )}
-                </div>
-                <button onClick={onLogout} style={{ padding: '6px 10px' }}>
+          <div className="top-right">
+            <span className="pill" title="Состояние backend">
+              Backend: <strong>{health?.status ?? (healthErr ? 'ошибка' : '...')}</strong>
+            </span>
+
+            {token && me ? (
+              <>
+                <span className="pill" title="Текущий пользователь">
+                  <strong>{me.displayName ?? me.email}</strong>
+                </span>
+                <button className="btn btn-ghost" onClick={onLogout} type="button">
                   Выйти
                 </button>
-              </div>
+              </>
+            ) : null}
+          </div>
+        </div>
+      </header>
 
-              {actionOk && <div style={{ marginTop: 10, color: '#0a7d24' }}>{actionOk}</div>}
-              {actionErr && <pre style={{ marginTop: 10, background: '#fee', padding: 12 }}>Ошибка: {actionErr}</pre>}
+      <main className="main">
+        <div className="container">
+          {actionOk && <div className="alert ok">✅ {actionOk}</div>}
+          {actionErr && <div className="alert err">❌ {actionErr}</div>}
 
-              <div style={{ marginTop: 10 }}>
-                Публичная проверка demo сертификата: <a href={`${apiUrl}/certs/outer/demo-public-id-12345`} target="_blank">/certs/outer/demo-public-id-12345</a>
-              </div>
+          {!token || !me ? (
+            <div className="grid grid-2" style={{ marginTop: 10 }}>
+              <section className="card">
+                <div className="card-header">
+                  <div>
+                    <h2 style={{ margin: 0 }}>Вход</h2>
+                    <div className="muted" style={{ marginTop: 4 }}>
+                      Быстрый логин для проверки ролей. Пользователи создаются при старте backend.
+                    </div>
+                  </div>
+                </div>
+
+                <form onSubmit={onLogin} className="grid" style={{ gap: 12 }}>
+                  <div className="row">
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setLoginEmail('admin@example.com');
+                        setLoginPassword('admin123');
+                      }}
+                    >
+                      Admin
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setLoginEmail('creator@example.com');
+                        setLoginPassword('creator123');
+                      }}
+                    >
+                      Creator
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => {
+                        setLoginEmail('signer@example.com');
+                        setLoginPassword('signer123');
+                      }}
+                    >
+                      Signer
+                    </button>
+                    <div className="spacer" />
+                  </div>
+
+                  <div className="field">
+                    <label>Email</label>
+                    <input className="input" value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} />
+                  </div>
+
+                  <div className="field">
+                    <label>Пароль</label>
+                    <input
+                      className="input"
+                      type="password"
+                      value={loginPassword}
+                      onChange={(e) => setLoginPassword(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="row">
+                    <button className="btn btn-primary" type="submit">
+                      Войти
+                    </button>
+                  </div>
+
+                  {authErr && <div className="alert err">Ошибка: {authErr}</div>}
+
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    Подсказка: проверь <code>.env</code> (переменная DEV_BOOTSTRAP).
+                  </div>
+                </form>
+              </section>
+
+              <section className="card">
+                <div className="card-header">
+                  <div>
+                    <h2 style={{ margin: 0 }}>Система</h2>
+                    <div className="muted" style={{ marginTop: 4 }}>
+                      Быстрая диагностика соединения с backend.
+                    </div>
+                  </div>
+                </div>
+
+                {healthErr && <div className="alert err">Ошибка: {healthErr}</div>}
+                {!health && !healthErr && <div className="muted">Загружаю...</div>}
+                {health && (
+                  <div className="alert ok" style={{ marginBottom: 12 }}>
+                    Backend OK • DB {health.db}
+                  </div>
+                )}
+                {health && (
+                  <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(health, null, 2)}</pre>
+                )}
+
+                <div style={{ marginTop: 12 }}>
+                  <div className="muted" style={{ fontSize: 13 }}>
+                    Public demo verify:
+                  </div>
+                  <a href={`${apiUrl}/certs/outer/demo-public-id-12345`} target="_blank" rel="noreferrer">
+                    /certs/outer/demo-public-id-12345
+                  </a>
+                </div>
+              </section>
             </div>
-          )}
-        </section>
+          ) : (
+            <>
+              {/* Tabs content */}
+              {activeTab === 'exams' && (
+                <div className="grid" style={{ marginTop: 10 }}>
+                  {hasPerm(me, 'exam:create') && (
+                    <section className="card">
+                      <div className="card-header">
+                        <div>
+                          <h2 style={{ margin: 0 }}>Создать попытку экзамена</h2>
+                          <div className="muted" style={{ marginTop: 4 }}>
+                            Заполните данные, выберите подписанта и (опционально) шаблон сертификата.
+                          </div>
+                        </div>
+                        <div className="row">
+                          <button className="btn" onClick={refreshMine} type="button">
+                            Обновить мои попытки
+                          </button>
+                        </div>
+                      </div>
 
-        {token && me && hasPerm(me, 'exam:create') && (
-          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
-            <h2 style={{ marginTop: 0 }}>Создать попытку экзамена</h2>
-            <div style={{ display: 'grid', gap: 10, maxWidth: 640 }}>
-              <label>
-                ФИО
-                <input value={fullName} onChange={(e) => setFullName(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
-              </label>
-              <label>
-                Должность
-                <input value={position} onChange={(e) => setPosition(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
-              </label>
-              <label>
-                Employee Code (опционально)
-                <input value={employeeCode} onChange={(e) => setEmployeeCode(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
-              </label>
-              <label>
-                Тип экзамена
-                <select value={examTypeId} onChange={(e) => setExamTypeId(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
-                  {examTypes.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} ({t.code})
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Шаблон сертификата (опционально)
-                <select value={templateVersionId} onChange={(e) => setTemplateVersionId(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
-                  <option value="">(по умолчанию для типа экзамена)</option>
-                  {templateVersions.map((tv) => (
-                    <option key={tv.id} value={tv.id}>
-                      {tv.templateName} v{tv.version}
-                    </option>
-                  ))}
-                </select>
-              </label>
+                      <div className="grid grid-2">
+                        <div className="field">
+                          <label>ФИО</label>
+                          <input className="input" value={fullName} onChange={(e) => setFullName(e.target.value)} />
+                        </div>
+                        <div className="field">
+                          <label>Должность</label>
+                          <input className="input" value={position} onChange={(e) => setPosition(e.target.value)} />
+                        </div>
 
-              <label>
-                Оценка
-                <select value={grade} onChange={(e) => setGrade(e.target.value as any)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
-                  <option value="gold">Gold</option>
-                  <option value="silver">Silver</option>
-                  <option value="fail">Не сдал</option>
-                </select>
-              </label>
-              <label>
-                Дата экзамена
-                <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
-              </label>
+                        <div className="field">
+                          <label>Employee Code (опционально)</label>
+                          <input className="input" value={employeeCode} onChange={(e) => setEmployeeCode(e.target.value)} />
+                        </div>
 
-              {hasPerm(me, 'users:read') && (
-                <label>
-                  Кто подписывает
-                  <select value={signerUserId} onChange={(e) => setSignerUserId(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
-                    <option value="">(не выбрано)</option>
-                    {users.map((u) => (
-                      <option key={u.id} value={u.id}>
-                        {u.displayName ?? u.email}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                        <div className="field">
+                          <label>Тип экзамена</label>
+                          <select className="select" value={examTypeId} onChange={(e) => setExamTypeId(e.target.value)}>
+                            {examTypes.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} ({t.code})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="field">
+                          <label>Шаблон сертификата (опционально)</label>
+                          <select className="select" value={templateVersionId} onChange={(e) => setTemplateVersionId(e.target.value)}>
+                            <option value="">(по умолчанию для типа экзамена)</option>
+                            {templateVersions.map((tv) => (
+                              <option key={tv.id} value={tv.id}>
+                                {tv.templateName} v{tv.version}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="field">
+                          <label>Оценка</label>
+                          <select className="select" value={grade} onChange={(e) => setGrade(e.target.value as any)}>
+                            <option value="gold">Gold</option>
+                            <option value="silver">Silver</option>
+                            <option value="fail">Не сдал</option>
+                          </select>
+                        </div>
+
+                        <div className="field">
+                          <label>Дата экзамена</label>
+                          <input className="input" type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} />
+                        </div>
+
+                        {hasPerm(me, 'users:read') && (
+                          <div className="field">
+                            <label>Кто подписывает</label>
+                            <select className="select" value={signerUserId} onChange={(e) => setSignerUserId(e.target.value)}>
+                              <option value="">(не выбрано)</option>
+                              {users.map((u) => (
+                                <option key={u.id} value={u.id}>
+                                  {u.displayName ?? u.email}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
+
+                        <div className="field" style={{ gridColumn: '1 / -1' }}>
+                          <label>Примечание</label>
+                          <input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} />
+                        </div>
+
+                        <div className="row" style={{ gridColumn: '1 / -1' }}>
+                          <button className="btn btn-primary" onClick={createAttempt} type="button">
+                            Создать
+                          </button>
+                          <button className="btn" onClick={refreshMine} type="button">
+                            Обновить список
+                          </button>
+                          <span className="muted" style={{ fontSize: 13 }}>
+                            Demo attempt создаётся автоматически при старте backend (marker <code>DEMO_ATTEMPT_V1</code>).
+                          </span>
+                        </div>
+                      </div>
+                    </section>
+                  )}
+
+                  <section className="card">
+                    <div className="card-header">
+                      <div>
+                        <h2 style={{ margin: 0 }}>Мои попытки</h2>
+                        <div className="muted" style={{ marginTop: 4 }}>
+                          Черновики/на подписи/подписано — всё в одном списке.
+                        </div>
+                      </div>
+                      <div className="row">
+                        <button className="btn" onClick={refreshMine} type="button">
+                          Обновить
+                        </button>
+                      </div>
+                    </div>
+
+                    {attempts.length === 0 ? (
+                      <div className="muted">Пока пусто.</div>
+                    ) : (
+                      <div className="table-wrap">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th>Сотрудник</th>
+                              <th>Экзамен</th>
+                              <th>Попытка</th>
+                              <th>Оценка</th>
+                              <th>Статус</th>
+                              <th>Подписант</th>
+                              <th>Сертификат</th>
+                              <th className="actions" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {attempts.map((a) => {
+                              const gb = gradeBadge(a.grade);
+                              return (
+                                <tr key={a.id}>
+                                  <td>
+                                    <div style={{ fontWeight: 800 }}>{a.person.fullName}</div>
+                                    <div className="muted" style={{ fontSize: 12 }}>
+                                      {a.person.position}
+                                      {a.person.employeeCode ? ` • ${a.person.employeeCode}` : ''}
+                                    </div>
+                                  </td>
+                                  <td>
+                                    {a.examType.name} <span className="muted">({a.examType.code})</span>
+                                  </td>
+                                  <td>#{a.attemptNo}</td>
+                                  <td>
+                                    <span className={`badge ${gb.cls}`}>{gb.text}</span>
+                                  </td>
+                                  <td>
+                                    <span className="badge info">{a.status}</span>
+                                  </td>
+                                  <td>{a.signerUser ? (a.signerUser.displayName ?? a.signerUser.email) : '—'}</td>
+                                  <td>
+                                    {a.certificate ? (
+                                      <div className="grid" style={{ gap: 8 }}>
+                                        <div className="row">
+                                          <span style={{ fontWeight: 900 }}>{a.certificate.certificateNumber}</span>
+                                          <span className="muted" style={{ fontSize: 12 }}>
+                                            ({a.certificate.status})
+                                          </span>
+                                        </div>
+                                        <div className="row">
+                                          <button className="btn btn-ghost" onClick={() => openCert(a.certificate!.publicId)} type="button">
+                                            Внутр. вид
+                                          </button>
+                                          <a className="btn btn-ghost" href={`${apiUrl}/certs/outer/${a.certificate.publicId}`} target="_blank" rel="noreferrer">
+                                            Проверка
+                                          </a>
+                                        </div>
+                                        {a.certificate.validTo && (
+                                          <div className="muted" style={{ fontSize: 12 }}>
+                                            Действует до: {fmtDate(a.certificate.validTo)}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <span className="muted">—</span>
+                                    )}
+                                  </td>
+                                  <td className="actions">
+                                    {hasPerm(me, 'exam:submit') && ['draft', 'needs_fix'].includes(a.status) && a.grade !== 'fail' && (
+                                      <button className="btn btn-primary" onClick={() => submitAttempt(a.id)} type="button">
+                                        Отправить на подпись
+                                      </button>
+                                    )}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </section>
+                </div>
               )}
 
-              <label>
-                Примечание
-                <input value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
-              </label>
+              {activeTab === 'approvals' && hasPerm(me, 'approval:review') && (
+                <div className="grid" style={{ marginTop: 10 }}>
+                  <section className="card">
+                    <div className="card-header">
+                      <div>
+                        <h2 style={{ margin: 0 }}>Inbox подписанта</h2>
+                        <div className="muted" style={{ marginTop: 4 }}>
+                          Подпишите или отклоните записи. Массовые операции доступны через чекбоксы.
+                        </div>
+                      </div>
+                      <div className="row">
+                        <button className="btn" onClick={refreshInbox} type="button">
+                          Обновить
+                        </button>
+                        <button className="btn btn-primary" disabled={selectedApprovalIds.length === 0} onClick={() => bulk('approve')} type="button">
+                          Массово подписать ({selectedApprovalIds.length})
+                        </button>
+                        <button className="btn btn-danger" disabled={selectedApprovalIds.length === 0} onClick={() => bulk('reject')} type="button">
+                          Массово отклонить ({selectedApprovalIds.length})
+                        </button>
+                      </div>
+                    </div>
 
-              <div style={{ display: 'flex', gap: 10 }}>
-                <button onClick={createAttempt} style={{ padding: '8px 12px' }}>
-                  Создать
-                </button>
-                <button onClick={refreshMine} style={{ padding: '8px 12px' }}>
-                  Обновить список
-                </button>
-              </div>
-              <div style={{ fontSize: 13, opacity: 0.8 }}>
-                Подсказка: при старте backend уже создаётся demo draft attempt (marker <code>DEMO_ATTEMPT_V1</code>), который можно отправить на подпись.
-              </div>
-            </div>
-          </section>
-        )}
-
-
-        {token && me && hasPerm(me, 'templates:manage') && (
-          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
-            <h2 style={{ marginTop: 0 }}>Управление шаблонами</h2>
-            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
-              <button onClick={refreshTemplatesAdmin} style={{ padding: '8px 12px' }}>Обновить</button>
-            </div>
-
-            <div style={{ display: 'grid', gap: 10, maxWidth: 740 }}>
-              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Создать шаблон</div>
-                <div style={{ display: 'grid', gap: 8 }}>
-                  <input value={tplName} onChange={(e) => setTplName(e.target.value)} placeholder="Название" style={{ padding: 8 }} />
-                  <input value={tplDesc} onChange={(e) => setTplDesc(e.target.value)} placeholder="Описание (опц.)" style={{ padding: 8 }} />
-                  <button onClick={createTemplateAdmin} style={{ padding: '8px 12px', width: 'fit-content' }}>Создать</button>
-                </div>
-              </div>
-
-              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Создать версию (активную)</div>
-                <div style={{ display: 'grid', gap: 8 }}>
-                  <select value={tplVerTemplateId} onChange={(e) => setTplVerTemplateId(e.target.value)} style={{ padding: 8 }}>
-                    <option value="">(выберите шаблон)</option>
-                    {templatesAdmin.map((tpl) => (
-                      <option key={tpl.id} value={tpl.id}>
-                        {tpl.name}
-                      </option>
-                    ))}
-                  </select>
-                  <textarea value={tplVerConfig} onChange={(e) => setTplVerConfig(e.target.value)} rows={10} style={{ padding: 8, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }} />
-                  <input type="file" accept="image/png,image/jpeg" onChange={(e) => setTplVerFile(e.target.files?.[0] ?? null)} />
-                  <button onClick={createTemplateVersionAdmin} style={{ padding: '8px 12px', width: 'fit-content' }}>Загрузить версию</button>
-                </div>
-              </div>
-
-              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
-                <div style={{ fontWeight: 600, marginBottom: 8 }}>Список</div>
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(templatesAdmin, null, 2)}</pre>
-              </div>
-            </div>
-          </section>
-        )}
-
-        {token && me && (
-          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
-            <h2 style={{ marginTop: 0 }}>Мои попытки</h2>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
-              <button onClick={refreshMine} style={{ padding: '8px 12px' }}>
-                Обновить
-              </button>
-            </div>
-            {attempts.length === 0 ? (
-              <div style={{ opacity: 0.8 }}>Пока пусто.</div>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 8 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Сотрудник</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Экзамен</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Попытка</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Оценка</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Статус</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Подписант</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Сертификат</th>
-                      <th style={{ padding: 8, borderBottom: '1px solid #eee' }} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {attempts.map((a) => (
-                      <tr key={a.id}>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>
-                          <div><b>{a.person.fullName}</b></div>
-                          <div style={{ fontSize: 12, opacity: 0.75 }}>{a.person.position}{a.person.employeeCode ? ` • ${a.person.employeeCode}` : ''}</div>
-                        </td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.examType.name} ({a.examType.code})</td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>#{a.attemptNo}</td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.grade}</td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.status}</td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.signerUser ? (a.signerUser.displayName ?? a.signerUser.email) : '—'}</td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>
-                          {a.certificate ? (
-                            <div style={{ display: 'grid', gap: 6 }}>
-                              <div><b>{a.certificate.certificateNumber}</b> <span style={{ fontSize: 12, opacity: 0.75 }}>({a.certificate.status})</span></div>
-                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                                <button onClick={() => openCert(a.certificate!.publicId)} style={{ padding: '6px 10px' }}>Внутр. вид</button>
-                                <a
-                                  href={`${apiUrl}/certs/outer/${a.certificate.publicId}`}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  style={{ padding: '6px 10px', background: '#fff', border: '1px solid #ddd', borderRadius: 6, textDecoration: 'none', color: 'inherit' }}
-                                >
-                                  Проверка
-                                </a>
-                              </div>
-                              {a.certificate.validTo && <div style={{ fontSize: 12, opacity: 0.75 }}>Действует до: {new Date(a.certificate.validTo).toLocaleDateString()}</div>}
-                            </div>
-                          ) : (
-                            <span style={{ opacity: 0.75 }}>—</span>
-                          )}
-                        </td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1', textAlign: 'right' }}>
-                          {hasPerm(me, 'exam:submit') && ['draft', 'needs_fix'].includes(a.status) && a.grade !== 'fail' && (
-                            <button onClick={() => submitAttempt(a.id)} style={{ padding: '6px 10px' }}>
-                              Отправить на подпись
-                            </button>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
-
-        {token && me && selectedCertPublicId && (
-          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
-            <h2 style={{ marginTop: 0 }}>Просмотр сертификата</h2>
-            <div style={{ marginBottom: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              <button onClick={() => openCert(selectedCertPublicId)} style={{ padding: '8px 12px' }}>Обновить</button>
-              <button onClick={() => downloadPdf(selectedCertPublicId)} style={{ padding: '8px 12px' }}>Скачать PDF</button>
-              <a
-                href={`${apiUrl}/certs/outer/${selectedCertPublicId}`}
-                target="_blank"
-                rel="noreferrer"
-                style={{ padding: '8px 12px', background: '#fff', border: '1px solid #ddd', borderRadius: 6, textDecoration: 'none', color: 'inherit' }}
-              >
-                Открыть public verify
-              </a>
-              <button onClick={() => { setSelectedCertPublicId(null); setSelectedCert(null); }} style={{ padding: '8px 12px' }}>
-                Закрыть
-              </button>
-            </div>
-
-            {!selectedCert ? (
-              <div style={{ opacity: 0.8 }}>Загружаю...</div>
-            ) : selectedCert.status === 'not_found' ? (
-              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>Не найдено.</div>
-            ) : (
-              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
-                  <div>
-                    <div style={{ fontSize: 18 }}><b>{selectedCert.certificate.certificateNumber}</b></div>
-                    <div style={{ fontSize: 13, opacity: 0.75 }}>Статус: {selectedCert.certificate.status}{selectedCert.certificate.expired ? ' (просрочен)' : ''}</div>
-                  </div>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {hasPerm(me, 'certificate:revoke') && selectedCert.certificate.status === 'issued' && (
-                      <>
-                        <button onClick={() => revokeCert(selectedCertPublicId, 'revoke')} style={{ padding: '8px 12px' }}>Отозвать</button>
-                        <button onClick={() => revokeCert(selectedCertPublicId, 'annul')} style={{ padding: '8px 12px' }}>Аннулировать</button>
-                      </>
+                    {approvals.length === 0 ? (
+                      <div className="muted">Нет ожидающих подписей.</div>
+                    ) : (
+                      <div className="table-wrap">
+                        <table className="table">
+                          <thead>
+                            <tr>
+                              <th style={{ width: 44 }} />
+                              <th>Сотрудник</th>
+                              <th>Экзамен</th>
+                              <th>Оценка</th>
+                              <th>От кого</th>
+                              <th className="actions" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {approvals.map((a) => {
+                              const gb = gradeBadge(a.examAttempt.grade);
+                              return (
+                                <tr key={a.id}>
+                                  <td>
+                                    <input type="checkbox" checked={selectedApprovalIds.includes(a.id)} onChange={() => toggleApproval(a.id)} />
+                                  </td>
+                                  <td>
+                                    <div style={{ fontWeight: 800 }}>{a.examAttempt.person.fullName}</div>
+                                    <div className="muted" style={{ fontSize: 12 }}>
+                                      {a.examAttempt.person.position}
+                                      {a.examAttempt.person.employeeCode ? ` • ${a.examAttempt.person.employeeCode}` : ''}
+                                    </div>
+                                  </td>
+                                  <td>
+                                    {a.examAttempt.examType.name} <span className="muted">({a.examAttempt.examType.code})</span>
+                                  </td>
+                                  <td>
+                                    <span className={`badge ${gb.cls}`}>{gb.text}</span>
+                                  </td>
+                                  <td>{a.examAttempt.createdBy.displayName ?? a.examAttempt.createdBy.email}</td>
+                                  <td className="actions">
+                                    <button className="btn btn-primary" onClick={() => approveOne(a.id)} type="button">
+                                      Подписать
+                                    </button>
+                                    <button className="btn btn-danger" onClick={() => rejectOne(a.id)} type="button">
+                                      Отклонить
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
                     )}
-                  </div>
+                  </section>
                 </div>
+              )}
 
-                <hr style={{ margin: '12px 0', border: 'none', borderTop: '1px solid #eee' }} />
-                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(selectedCert, null, 2)}</pre>
-              </div>
-            )}
-          </section>
-        )}
+              {activeTab === 'certs' && hasPerm(me, 'certificate:view_internal') && (
+                <div className="grid grid-2" style={{ marginTop: 10 }}>
+                  <section className="card">
+                    <div className="card-header">
+                      <div>
+                        <h2 style={{ margin: 0 }}>Реестр сертификатов</h2>
+                        <div className="muted" style={{ marginTop: 4 }}>
+                          Поиск по номеру, ФИО и должности. Фильтры применяются и для экспорта.
+                        </div>
+                      </div>
+                      <div className="row">
+                        <button className="btn" onClick={refreshCerts} type="button">
+                          Обновить
+                        </button>
+                        {hasPerm(me, 'export:run') && (
+                          <button className="btn btn-primary" onClick={exportCsv} type="button">
+                            Экспорт CSV
+                          </button>
+                        )}
+                      </div>
+                    </div>
 
-        {token && me && hasPerm(me, 'approval:review') && (
-          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
-            <h2 style={{ marginTop: 0 }}>Inbox подписанта</h2>
-            <div style={{ display: 'flex', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
-              <button onClick={refreshInbox} style={{ padding: '8px 12px' }}>Обновить</button>
-              <button disabled={selectedApprovalIds.length === 0} onClick={() => bulk('approve')} style={{ padding: '8px 12px' }}>
-                Массово подписать ({selectedApprovalIds.length})
-              </button>
-              <button disabled={selectedApprovalIds.length === 0} onClick={() => bulk('reject')} style={{ padding: '8px 12px' }}>
-                Массово отклонить ({selectedApprovalIds.length})
-              </button>
-            </div>
+                    <div className="grid" style={{ gap: 12 }}>
+                      <div className="row">
+                        <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                          <label>Поиск</label>
+                          <input className="input" value={certQ} onChange={(e) => setCertQ(e.target.value)} placeholder="номер / ФИО / должность" />
+                        </div>
 
-            {approvals.length === 0 ? (
-              <div style={{ opacity: 0.8 }}>Нет ожидающих подписей.</div>
-            ) : (
-              <div style={{ overflowX: 'auto' }}>
-                <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 8 }}>
-                  <thead>
-                    <tr>
-                      <th style={{ padding: 8, borderBottom: '1px solid #eee' }} />
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Сотрудник</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Экзамен</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Оценка</th>
-                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>От кого</th>
-                      <th style={{ padding: 8, borderBottom: '1px solid #eee' }} />
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {approvals.map((a) => (
-                      <tr key={a.id}>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>
-                          <input type="checkbox" checked={selectedApprovalIds.includes(a.id)} onChange={() => toggleApproval(a.id)} />
-                        </td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>
-                          <div><b>{a.examAttempt.person.fullName}</b></div>
-                          <div style={{ fontSize: 12, opacity: 0.75 }}>{a.examAttempt.person.position}{a.examAttempt.person.employeeCode ? ` • ${a.examAttempt.person.employeeCode}` : ''}</div>
-                        </td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.examAttempt.examType.name} ({a.examAttempt.examType.code})</td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.examAttempt.grade}</td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.examAttempt.createdBy.displayName ?? a.examAttempt.createdBy.email}</td>
-                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1', textAlign: 'right' }}>
-                          <button onClick={() => approveOne(a.id)} style={{ padding: '6px 10px', marginRight: 8 }}>Подписать</button>
-                          <button onClick={() => rejectOne(a.id)} style={{ padding: '6px 10px' }}>Отклонить</button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </section>
-        )}
-      </div>
+                        <div className="field">
+                          <label>Статус</label>
+                          <select className="select" value={certStatus} onChange={(e) => setCertStatus(e.target.value)}>
+                            <option value="">(любой)</option>
+                            <option value="issued">issued</option>
+                            <option value="revoked">revoked</option>
+                            <option value="annulled">annulled</option>
+                            <option value="expired">expired</option>
+                          </select>
+                        </div>
+
+                        <div className="field">
+                          <label>Оценка</label>
+                          <select className="select" value={certGrade} onChange={(e) => setCertGrade(e.target.value)}>
+                            <option value="">(любая)</option>
+                            <option value="gold">gold</option>
+                            <option value="silver">silver</option>
+                          </select>
+                        </div>
+
+                        <div className="field">
+                          <label>Тип экзамена</label>
+                          <select className="select" value={certExamTypeId} onChange={(e) => setCertExamTypeId(e.target.value)}>
+                            <option value="">(любой)</option>
+                            {examTypes.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.name} ({t.code})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="row">
+                        <div className="field">
+                          <label>Validity</label>
+                          <select className="select" value={certValidity} onChange={(e) => setCertValidity(e.target.value)}>
+                            <option value="">(любой)</option>
+                            <option value="active">active</option>
+                            <option value="expired">expired</option>
+                          </select>
+                        </div>
+
+                        <div className="field">
+                          <label>Issued from</label>
+                          <input className="input" type="date" value={certIssuedFrom} onChange={(e) => setCertIssuedFrom(e.target.value)} />
+                        </div>
+
+                        <div className="field">
+                          <label>Issued to</label>
+                          <input className="input" type="date" value={certIssuedTo} onChange={(e) => setCertIssuedTo(e.target.value)} />
+                        </div>
+
+                        <div className="spacer" />
+                        <button className="btn btn-primary" onClick={() => refreshCerts(1)} type="button">
+                          Применить
+                        </button>
+                      </div>
+
+                      {certRegistry ? (
+                        <>
+                          <div className="muted" style={{ fontSize: 13 }}>
+                            Найдено: <b>{certRegistry.total}</b>
+                          </div>
+                          <div className="table-wrap">
+                            <table className="table">
+                              <thead>
+                                <tr>
+                                  <th>Номер</th>
+                                  <th>Сотрудник</th>
+                                  <th>Экзамен</th>
+                                  <th>Оценка</th>
+                                  <th>Статус</th>
+                                  <th>Выдан</th>
+                                  <th className="actions" />
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {certRegistry.items.map((c) => {
+                                  const gb = gradeBadge(c.grade);
+                                  const sb = certStatusBadge(c.status, c.expired);
+                                  return (
+                                    <tr key={c.publicId}>
+                                      <td style={{ fontWeight: 900 }}>{c.certificateNumber}</td>
+                                      <td>
+                                        <div style={{ fontWeight: 800 }}>{c.person.fullName}</div>
+                                        <div className="muted" style={{ fontSize: 12 }}>
+                                          {c.person.position}
+                                          {c.person.employeeCode ? ` • ${c.person.employeeCode}` : ''}
+                                        </div>
+                                      </td>
+                                      <td>
+                                        {c.examType.name} <span className="muted">({c.examType.code})</span>
+                                      </td>
+                                      <td>
+                                        <span className={`badge ${gb.cls}`}>{gb.text}</span>
+                                      </td>
+                                      <td>
+                                        <span className={`badge ${sb.cls}`}>{sb.text}</span>
+                                      </td>
+                                      <td>
+                                        {fmtDate(c.issuedAt)}
+                                        {c.validTo ? <div className="muted" style={{ fontSize: 12 }}>до {fmtDate(c.validTo)}</div> : <div className="muted" style={{ fontSize: 12 }}>бессрочно</div>}
+                                      </td>
+                                      <td className="actions">
+                                        <button className="btn btn-ghost" onClick={() => openCert(c.publicId)} type="button">
+                                          Открыть
+                                        </button>
+                                        <button className="btn btn-ghost" onClick={() => downloadPdf(c.publicId)} type="button">
+                                          PDF
+                                        </button>
+                                        <a className="btn btn-ghost" href={`${apiUrl}/certs/outer/${c.publicId}`} target="_blank" rel="noreferrer">
+                                          Verify
+                                        </a>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          <div className="row" style={{ justifyContent: 'space-between', marginTop: 10 }}>
+                            <div className="muted" style={{ fontSize: 13 }}>
+                              Страница {certRegistry.page} из {Math.max(1, Math.ceil(certRegistry.total / certRegistry.pageSize))}
+                            </div>
+                            <div className="row">
+                              <button className="btn" disabled={certRegistry.page <= 1} onClick={() => refreshCerts(certRegistry.page - 1)} type="button">
+                                Назад
+                              </button>
+                              <button
+                                className="btn"
+                                disabled={certRegistry.page >= Math.ceil(certRegistry.total / certRegistry.pageSize)}
+                                onClick={() => refreshCerts(certRegistry.page + 1)}
+                                type="button"
+                              >
+                                Вперёд
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <div className="muted">Нажмите “Применить”, чтобы загрузить список.</div>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="card">
+                    <div className="card-header">
+                      <div>
+                        <h2 style={{ margin: 0 }}>Карточка сертификата</h2>
+                        <div className="muted" style={{ marginTop: 4 }}>
+                          Выберите сертификат в реестре или из списка попыток.
+                        </div>
+                      </div>
+                      {selectedCertPublicId ? (
+                        <div className="row">
+                          <button className="btn" onClick={() => openCert(selectedCertPublicId)} type="button">
+                            Обновить
+                          </button>
+                          <button className="btn btn-ghost" onClick={() => downloadPdf(selectedCertPublicId)} type="button">
+                            PDF
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {!selectedCert ? (
+                      <div className="muted">Пока ничего не выбрано.</div>
+                    ) : selectedCert.status === 'not_found' ? (
+                      <div className="alert err">Сертификат не найден.</div>
+                    ) : (
+                      <div className="grid" style={{ gap: 12 }}>
+                        <div className="row" style={{ flexWrap: 'wrap' }}>
+                          <span className="badge info">{selectedCert.certificate.certificateNumber}</span>
+                          <span className={`badge ${certStatusBadge(selectedCert.certificate.status, selectedCert.certificate.expired).cls}`}>
+                            {certStatusBadge(selectedCert.certificate.status, selectedCert.certificate.expired).text}
+                          </span>
+                          <span className="badge neutral">
+                            issued {fmtDate(selectedCert.certificate.issuedAt)}
+                          </span>
+                          {selectedCert.certificate.validTo ? (
+                            <span className="badge neutral">valid to {fmtDate(selectedCert.certificate.validTo)}</span>
+                          ) : (
+                            <span className="badge neutral">бессрочно</span>
+                          )}
+                        </div>
+
+                        {selectedCert.certificate.template ? (
+                          <div className="muted" style={{ fontSize: 13 }}>
+                            Шаблон: <b>{selectedCert.certificate.template.name}</b> v{selectedCert.certificate.template.version}
+                          </div>
+                        ) : (
+                          <div className="muted" style={{ fontSize: 13 }}>Шаблон: (по умолчанию)</div>
+                        )}
+
+                        {hasPerm(me, 'certificate:revoke') && selectedCert.certificate.status === 'issued' && (
+                          <div className="row">
+                            <button className="btn btn-danger" onClick={() => revokeCert(selectedCert.certificate.publicId)} type="button">
+                              Отозвать
+                            </button>
+                            <button className="btn btn-danger" onClick={() => annulCert(selectedCert.certificate.publicId)} type="button">
+                              Аннулировать
+                            </button>
+                          </div>
+                        )}
+
+                        <div className="card" style={{ padding: 12, boxShadow: 'none' }}>
+                          <h3 style={{ marginTop: 0 }}>Данные (JSON)</h3>
+                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(selectedCert, null, 2)}</pre>
+                        </div>
+                      </div>
+                    )}
+                  </section>
+                </div>
+              )}
+
+              {activeTab === 'templates' && hasPerm(me, 'templates:manage') && (
+                <div className="grid" style={{ marginTop: 10 }}>
+                  <section className="card">
+                    <div className="card-header">
+                      <div>
+                        <h2 style={{ margin: 0 }}>Шаблоны сертификатов</h2>
+                        <div className="muted" style={{ marginTop: 4 }}>
+                          Можно создавать несколько шаблонов и добавлять версии (фон + конфиг).
+                        </div>
+                      </div>
+                      <div className="row">
+                        <button className="btn" onClick={refreshTemplatesAdmin} type="button">
+                          Обновить
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="grid" style={{ gap: 14 }}>
+                      <div className="card" style={{ padding: 14, boxShadow: 'none' }}>
+                        <h3 style={{ marginTop: 0 }}>Создать шаблон</h3>
+                        <div className="row">
+                          <div className="field" style={{ flex: 1, minWidth: 260 }}>
+                            <label>Название</label>
+                            <input className="input" value={tplName} onChange={(e) => setTplName(e.target.value)} />
+                          </div>
+                          <div className="field" style={{ flex: 2, minWidth: 260 }}>
+                            <label>Описание (опционально)</label>
+                            <input className="input" value={tplDesc} onChange={(e) => setTplDesc(e.target.value)} />
+                          </div>
+                          <button className="btn btn-primary" onClick={createTemplateAdmin} type="button">
+                            Создать
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="card" style={{ padding: 14, boxShadow: 'none' }}>
+                        <h3 style={{ marginTop: 0 }}>Загрузить новую версию</h3>
+                        <div className="grid grid-2" style={{ alignItems: 'end' }}>
+                          <div className="field">
+                            <label>Шаблон</label>
+                            <select className="select" value={tplVerTemplateId} onChange={(e) => setTplVerTemplateId(e.target.value)}>
+                              <option value="">(выберите)</option>
+                              {templatesAdmin.map((t) => (
+                                <option key={t.id} value={t.id}>
+                                  {t.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="field" style={{ gridColumn: '1 / -1' }}>
+                            <label>Config JSON (минимальный)</label>
+                            <textarea className="textarea" value={tplVerConfig} onChange={(e) => setTplVerConfig(e.target.value)} />
+                          </div>
+
+                          <div className="field" style={{ gridColumn: '1 / -1' }}>
+                            <label>Фон (PNG/JPG, опционально)</label>
+                            <input type="file" onChange={(e) => setTplVerFile(e.target.files?.[0] ?? null)} />
+                          </div>
+
+                          <div className="row" style={{ gridColumn: '1 / -1' }}>
+                            <button className="btn btn-primary" disabled={!tplVerTemplateId} onClick={createTemplateVersionAdmin} type="button">
+                              Загрузить
+                            </button>
+                            <span className="muted" style={{ fontSize: 13 }}>
+                              Для прототипа достаточно config + без фона (PDF будет без background).
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="card" style={{ padding: 14, boxShadow: 'none' }}>
+                        <h3 style={{ marginTop: 0 }}>Список</h3>
+                        {templatesAdmin.length === 0 ? (
+                          <div className="muted">Пока нет шаблонов.</div>
+                        ) : (
+                          <div className="table-wrap">
+                            <table className="table">
+                              <thead>
+                                <tr>
+                                  <th>Шаблон</th>
+                                  <th>Версии</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {templatesAdmin.map((t) => (
+                                  <tr key={t.id}>
+                                    <td style={{ fontWeight: 900 }}>{t.name}</td>
+                                    <td className="muted">
+                                      {t.versions?.length ? t.versions.map((v: any) => `v${v.version}${v.isActive ? ' (active)' : ''}`).join(', ') : '—'}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        )}
+
+                        <details style={{ marginTop: 12 }}>
+                          <summary className="muted" style={{ cursor: 'pointer' }}>
+                            Показать JSON (debug)
+                          </summary>
+                          <pre style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>{JSON.stringify(templatesAdmin, null, 2)}</pre>
+                        </details>
+                      </div>
+                    </div>
+                  </section>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      </main>
+
+      <footer className="footer">
+        <div className="footer-inner">by "Цифровизация проетных задач"</div>
+      </footer>
     </div>
   );
 }
