@@ -4,50 +4,146 @@ type Health = { status: string; db: string; time: string };
 
 type AuthMe = { id: string; email: string; displayName: string | null; permissions: string[] };
 
+type ExamType = { id: string; name: string; code: string };
+
+type UserListItem = { id: string; email: string; displayName: string | null };
+
+type Attempt = {
+  id: string;
+  attemptNo: number;
+  grade: 'gold' | 'silver' | 'fail';
+  status: string;
+  examDate: string;
+  notes: string | null;
+  createdAt: string;
+  person: { fullName: string; position: string; employeeCode: string | null };
+  examType: { id: string; name: string; code: string };
+  signerUser: UserListItem | null;
+  approvals: any[];
+};
+
+type ApprovalInboxItem = {
+  id: string;
+  status: string;
+  createdAt: string;
+  examAttempt: {
+    id: string;
+    attemptNo: number;
+    grade: 'gold' | 'silver' | 'fail';
+    status: string;
+    examDate: string;
+    person: { fullName: string; position: string; employeeCode: string | null };
+    examType: { name: string; code: string };
+    createdBy: UserListItem;
+  };
+};
+
+function hasPerm(me: AuthMe | null, code: string) {
+  return !!me?.permissions?.includes(code);
+}
+
 export default function App() {
   const apiUrl = useMemo(() => import.meta.env.VITE_API_URL ?? 'http://localhost:3000', []);
+
   const [health, setHealth] = useState<Health | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+  const [healthErr, setHealthErr] = useState<string | null>(null);
 
   // Auth
   const [token, setToken] = useState<string | null>(() => localStorage.getItem('token'));
   const [me, setMe] = useState<AuthMe | null>(null);
-  const [loginEmail, setLoginEmail] = useState('admin@example.com');
-  const [loginPassword, setLoginPassword] = useState('admin123');
+  const [loginEmail, setLoginEmail] = useState('creator@example.com');
+  const [loginPassword, setLoginPassword] = useState('creator123');
   const [authErr, setAuthErr] = useState<string | null>(null);
 
-  const [internalCert, setInternalCert] = useState<any>(null);
-  const [internalErr, setInternalErr] = useState<string | null>(null);
+  // Data
+  const [examTypes, setExamTypes] = useState<ExamType[]>([]);
+  const [users, setUsers] = useState<UserListItem[]>([]);
+  const [attempts, setAttempts] = useState<Attempt[]>([]);
+  const [approvals, setApprovals] = useState<ApprovalInboxItem[]>([]);
+
+  // UI errors
+  const [actionErr, setActionErr] = useState<string | null>(null);
+  const [actionOk, setActionOk] = useState<string | null>(null);
+
+  async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+    const res = await fetch(`${apiUrl}${path}`, {
+      ...init,
+      headers: {
+        ...(init?.headers ?? {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`${res.status} ${text}`);
+    }
+    return res.json();
+  }
+
+  function flashOk(msg: string) {
+    setActionOk(msg);
+    setTimeout(() => setActionOk(null), 2500);
+  }
 
   useEffect(() => {
     fetch(`${apiUrl}/health`)
       .then((r) => r.json())
       .then(setHealth)
-      .catch((e) => setErr(String(e)));
+      .catch((e) => setHealthErr(String(e)));
   }, [apiUrl]);
 
+  // Load /auth/me
   useEffect(() => {
     if (!token) {
       setMe(null);
       return;
     }
-    fetch(`${apiUrl}/auth/me`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
-        return r.json();
-      })
+    apiFetch<AuthMe>('/auth/me')
       .then(setMe)
       .catch((e) => {
-        setAuthErr(String(e));
+        setAuthErr(String(e?.message ?? e));
         setMe(null);
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiUrl, token]);
+
+  // Load reference data after login
+  useEffect(() => {
+    if (!token || !me) return;
+
+    apiFetch<ExamType[]>('/exam-types')
+      .then(setExamTypes)
+      .catch(() => setExamTypes([]));
+
+    if (hasPerm(me, 'users:read')) {
+      apiFetch<UserListItem[]>('/users')
+        .then(setUsers)
+        .catch(() => setUsers([]));
+    } else {
+      setUsers([]);
+    }
+
+    // Mine attempts
+    apiFetch<Attempt[]>('/attempts/mine')
+      .then(setAttempts)
+      .catch(() => setAttempts([]));
+
+    // Inbox approvals
+    if (hasPerm(me, 'approval:review')) {
+      apiFetch<ApprovalInboxItem[]>('/approvals/inbox')
+        .then(setApprovals)
+        .catch(() => setApprovals([]));
+    } else {
+      setApprovals([]);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, me?.id]);
 
   async function onLogin(e: FormEvent) {
     e.preventDefault();
     setAuthErr(null);
+    setActionErr(null);
+    setActionOk(null);
     try {
       const res = await fetch(`${apiUrl}/auth/login`, {
         method: 'POST',
@@ -59,6 +155,7 @@ export default function App() {
       localStorage.setItem('token', data.access_token);
       setToken(data.access_token);
       setMe(data.user);
+      flashOk('Вы вошли');
     } catch (e: any) {
       setAuthErr(String(e?.message ?? e));
     }
@@ -68,112 +165,399 @@ export default function App() {
     localStorage.removeItem('token');
     setToken(null);
     setMe(null);
-    setInternalCert(null);
+    setExamTypes([]);
+    setUsers([]);
+    setAttempts([]);
+    setApprovals([]);
   }
 
-  async function loadInternalCert() {
-    setInternalErr(null);
-    setInternalCert(null);
+  async function refreshMine() {
+    if (!token) return;
     try {
-      const res = await fetch(`${apiUrl}/certs/inner/demo-public-id-12345`, {
-        headers: { Authorization: `Bearer ${token}` },
+      setAttempts(await apiFetch<Attempt[]>('/attempts/mine'));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function refreshInbox() {
+    if (!token || !hasPerm(me, 'approval:review')) return;
+    try {
+      setApprovals(await apiFetch<ApprovalInboxItem[]>('/approvals/inbox'));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  // Create attempt form
+  const [fullName, setFullName] = useState('Петров Пётр Петрович');
+  const [position, setPosition] = useState('Техник');
+  const [employeeCode, setEmployeeCode] = useState('E100');
+  const [examTypeId, setExamTypeId] = useState('');
+  const [grade, setGrade] = useState<'gold' | 'silver' | 'fail'>('gold');
+  const [examDate, setExamDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [signerUserId, setSignerUserId] = useState('');
+  const [notes, setNotes] = useState('');
+
+  useEffect(() => {
+    if (!examTypeId && examTypes.length > 0) setExamTypeId(examTypes[0].id);
+  }, [examTypes, examTypeId]);
+
+  useEffect(() => {
+    if (!signerUserId && users.length > 0) {
+      // Prefer signer@example.com if exists
+      const signer = users.find((u) => u.email.includes('signer@')) ?? users[0];
+      setSignerUserId(signer.id);
+    }
+  }, [users, signerUserId]);
+
+  async function createAttempt() {
+    setActionErr(null);
+    setActionOk(null);
+    try {
+      await apiFetch('/attempts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName,
+          position,
+          employeeCode: employeeCode || null,
+          examTypeId,
+          grade,
+          examDate,
+          signerUserId: signerUserId || null,
+          notes: notes || null,
+        }),
       });
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-      setInternalCert(await res.json());
+      flashOk('Попытка создана');
+      await refreshMine();
     } catch (e: any) {
-      setInternalErr(String(e?.message ?? e));
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  async function submitAttempt(id: string) {
+    setActionErr(null);
+    setActionOk(null);
+    try {
+      await apiFetch(`/attempts/${id}/submit`, { method: 'POST' });
+      flashOk('Отправлено на подпись');
+      await refreshMine();
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  // Approvals UI
+  const [selectedApprovalIds, setSelectedApprovalIds] = useState<string[]>([]);
+
+  function toggleApproval(id: string) {
+    setSelectedApprovalIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  async function approveOne(id: string) {
+    setActionErr(null);
+    setActionOk(null);
+    try {
+      await apiFetch(`/approvals/${id}/approve`, { method: 'POST' });
+      flashOk('Подписано');
+      setSelectedApprovalIds((prev) => prev.filter((x) => x !== id));
+      await refreshInbox();
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  async function rejectOne(id: string) {
+    const reason = window.prompt('Причина отклонения (необязательно):') ?? '';
+    setActionErr(null);
+    setActionOk(null);
+    try {
+      await apiFetch(`/approvals/${id}/reject`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason || null }),
+      });
+      flashOk('Отклонено');
+      setSelectedApprovalIds((prev) => prev.filter((x) => x !== id));
+      await refreshInbox();
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  async function bulk(action: 'approve' | 'reject') {
+    if (selectedApprovalIds.length === 0) return;
+    const reason = action === 'reject' ? (window.prompt('Причина для массового отклонения (необязательно):') ?? '') : '';
+
+    setActionErr(null);
+    setActionOk(null);
+    try {
+      await apiFetch('/approvals/bulk', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action, approvalIds: selectedApprovalIds, reason: reason || null }),
+      });
+      flashOk(action === 'approve' ? 'Массово подписано' : 'Массово отклонено');
+      setSelectedApprovalIds([]);
+      await refreshInbox();
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
     }
   }
 
   return (
-    <div style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 800 }}>
+    <div style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 980 }}>
       <h1>Реестр сертификатов — прототип</h1>
-      <p>
-        Это стартовый каркас: DB + backend + frontend поднимаются одной командой через docker-compose.
-      </p>
 
-      <h2>Backend health</h2>
-      {err && <pre style={{ background: '#fee', padding: 12 }}>Ошибка: {err}</pre>}
-      {!health && !err && <p>Загружаю...</p>}
-      {health && (
-        <pre style={{ background: '#f6f8fa', padding: 12, borderRadius: 8 }}>
-          {JSON.stringify(health, null, 2)}
-        </pre>
-      )}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
+        <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
+          <h2 style={{ marginTop: 0 }}>Backend health</h2>
+          {healthErr && <pre style={{ background: '#fee', padding: 12 }}>Ошибка: {healthErr}</pre>}
+          {!health && !healthErr && <p>Загружаю...</p>}
+          {health && <pre style={{ background: '#fff', padding: 12, borderRadius: 8 }}>{JSON.stringify(health, null, 2)}</pre>}
+        </section>
 
-      <h2>Проверка demo сертификата (внешний контур)</h2>
-      <p>
-        Попробуйте открыть: <a href={`${apiUrl}/certs/outer/demo-public-id-12345`} target="_blank">/certs/outer/demo-public-id-12345</a>
-      </p>
+        <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
+          <h2 style={{ marginTop: 0 }}>Auth</h2>
 
-      <h2>Внутренний контур (JWT + RBAC)</h2>
-      <p style={{ marginTop: 0 }}>
-        По умолчанию при старте создаётся dev-админ: <code>admin@example.com / admin123</code> (см. .env)
-      </p>
-
-      {!token && (
-        <form onSubmit={onLogin} style={{ background: '#f6f8fa', padding: 12, borderRadius: 8, maxWidth: 420 }}>
-          <div style={{ display: 'grid', gap: 8 }}>
-            <label>
-              Email
-              <input
-                value={loginEmail}
-                onChange={(e) => setLoginEmail(e.target.value)}
-                style={{ width: '100%', padding: 8, marginTop: 4 }}
-              />
-            </label>
-            <label>
-              Пароль
-              <input
-                type="password"
-                value={loginPassword}
-                onChange={(e) => setLoginPassword(e.target.value)}
-                style={{ width: '100%', padding: 8, marginTop: 4 }}
-              />
-            </label>
-            <button type="submit" style={{ padding: '8px 12px' }}>Войти</button>
-            {authErr && <div style={{ color: '#b00020' }}>Ошибка: {authErr}</div>}
-          </div>
-        </form>
-      )}
-
-      {token && (
-        <div style={{ background: '#f6f8fa', padding: 12, borderRadius: 8 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
-            <div>
-              <div>
-                Вы вошли как: <b>{me?.displayName ?? me?.email ?? '...'}</b>
+          {!token && (
+            <form onSubmit={onLogin} style={{ display: 'grid', gap: 10, maxWidth: 520 }}>
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                <button type="button" onClick={() => { setLoginEmail('admin@example.com'); setLoginPassword('admin123'); }}>
+                  Admin
+                </button>
+                <button type="button" onClick={() => { setLoginEmail('creator@example.com'); setLoginPassword('creator123'); }}>
+                  Creator
+                </button>
+                <button type="button" onClick={() => { setLoginEmail('signer@example.com'); setLoginPassword('signer123'); }}>
+                  Signer
+                </button>
               </div>
-              {me && (
-                <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>
-                  Permissions: {me.permissions.join(', ')}
+
+              <label>
+                Email
+                <input value={loginEmail} onChange={(e) => setLoginEmail(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
+              </label>
+              <label>
+                Пароль
+                <input type="password" value={loginPassword} onChange={(e) => setLoginPassword(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
+              </label>
+              <button type="submit" style={{ padding: '8px 12px' }}>
+                Войти
+              </button>
+              {authErr && <div style={{ color: '#b00020' }}>Ошибка: {authErr}</div>}
+              <div style={{ fontSize: 13, opacity: 0.8 }}>
+                Пользователи создаются при старте backend (см. <code>.env</code>).
+              </div>
+            </form>
+          )}
+
+          {token && (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+                <div>
+                  Вы вошли как: <b>{me?.displayName ?? me?.email ?? '...'}</b>
+                  {me && (
+                    <div style={{ fontSize: 13, opacity: 0.8, marginTop: 4 }}>
+                      Permissions: {me.permissions.join(', ')}
+                    </div>
+                  )}
                 </div>
-              )}
+                <button onClick={onLogout} style={{ padding: '6px 10px' }}>
+                  Выйти
+                </button>
+              </div>
+
+              {actionOk && <div style={{ marginTop: 10, color: '#0a7d24' }}>{actionOk}</div>}
+              {actionErr && <pre style={{ marginTop: 10, background: '#fee', padding: 12 }}>Ошибка: {actionErr}</pre>}
+
+              <div style={{ marginTop: 10 }}>
+                Публичная проверка demo сертификата: <a href={`${apiUrl}/certs/outer/demo-public-id-12345`} target="_blank">/certs/outer/demo-public-id-12345</a>
+              </div>
             </div>
-            <button onClick={onLogout} style={{ padding: '6px 10px' }}>Выйти</button>
-          </div>
+          )}
+        </section>
 
-          <div style={{ marginTop: 12 }}>
-            <button onClick={loadInternalCert} style={{ padding: '8px 12px' }}>
-              Открыть demo сертификат (internal)
-            </button>
-            {internalErr && <pre style={{ background: '#fee', padding: 12, marginTop: 12 }}>Ошибка: {internalErr}</pre>}
-            {internalCert && (
-              <pre style={{ background: '#fff', padding: 12, marginTop: 12, borderRadius: 8 }}>
-                {JSON.stringify(internalCert, null, 2)}
-              </pre>
+        {token && me && hasPerm(me, 'exam:create') && (
+          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
+            <h2 style={{ marginTop: 0 }}>Создать попытку экзамена</h2>
+            <div style={{ display: 'grid', gap: 10, maxWidth: 640 }}>
+              <label>
+                ФИО
+                <input value={fullName} onChange={(e) => setFullName(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
+              </label>
+              <label>
+                Должность
+                <input value={position} onChange={(e) => setPosition(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
+              </label>
+              <label>
+                Employee Code (опционально)
+                <input value={employeeCode} onChange={(e) => setEmployeeCode(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
+              </label>
+              <label>
+                Тип экзамена
+                <select value={examTypeId} onChange={(e) => setExamTypeId(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
+                  {examTypes.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} ({t.code})
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Оценка
+                <select value={grade} onChange={(e) => setGrade(e.target.value as any)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
+                  <option value="gold">Gold</option>
+                  <option value="silver">Silver</option>
+                  <option value="fail">Не сдал</option>
+                </select>
+              </label>
+              <label>
+                Дата экзамена
+                <input type="date" value={examDate} onChange={(e) => setExamDate(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
+              </label>
+
+              {hasPerm(me, 'users:read') && (
+                <label>
+                  Кто подписывает
+                  <select value={signerUserId} onChange={(e) => setSignerUserId(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
+                    <option value="">(не выбрано)</option>
+                    {users.map((u) => (
+                      <option key={u.id} value={u.id}>
+                        {u.displayName ?? u.email}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+
+              <label>
+                Примечание
+                <input value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }} />
+              </label>
+
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button onClick={createAttempt} style={{ padding: '8px 12px' }}>
+                  Создать
+                </button>
+                <button onClick={refreshMine} style={{ padding: '8px 12px' }}>
+                  Обновить список
+                </button>
+              </div>
+              <div style={{ fontSize: 13, opacity: 0.8 }}>
+                Подсказка: при старте backend уже создаётся demo draft attempt (marker <code>DEMO_ATTEMPT_V1</code>), который можно отправить на подпись.
+              </div>
+            </div>
+          </section>
+        )}
+
+        {token && me && (
+          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
+            <h2 style={{ marginTop: 0 }}>Мои попытки</h2>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 10 }}>
+              <button onClick={refreshMine} style={{ padding: '8px 12px' }}>
+                Обновить
+              </button>
+            </div>
+            {attempts.length === 0 ? (
+              <div style={{ opacity: 0.8 }}>Пока пусто.</div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 8 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Сотрудник</th>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Экзамен</th>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Попытка</th>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Оценка</th>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Статус</th>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Подписант</th>
+                      <th style={{ padding: 8, borderBottom: '1px solid #eee' }} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {attempts.map((a) => (
+                      <tr key={a.id}>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>
+                          <div><b>{a.person.fullName}</b></div>
+                          <div style={{ fontSize: 12, opacity: 0.75 }}>{a.person.position}{a.person.employeeCode ? ` • ${a.person.employeeCode}` : ''}</div>
+                        </td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.examType.name} ({a.examType.code})</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>#{a.attemptNo}</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.grade}</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.status}</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.signerUser ? (a.signerUser.displayName ?? a.signerUser.email) : '—'}</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1', textAlign: 'right' }}>
+                          {hasPerm(me, 'exam:submit') && ['draft', 'needs_fix'].includes(a.status) && a.grade !== 'fail' && (
+                            <button onClick={() => submitAttempt(a.id)} style={{ padding: '6px 10px' }}>
+                              Отправить на подпись
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             )}
-          </div>
-        </div>
-      )}
+          </section>
+        )}
 
-      <h2>Что дальше</h2>
-      <ol>
-        <li>Аутентификация (JWT) + RBAC permissions ✅</li>
-        <li>Экзамены и подписи (attempts + approvals + bulk)</li>
-        <li>Выпуск сертификатов (номер + срок годности) + public verify статусы</li>
-        <li>Шаблоны (несколько) и on-demand PDF (только internal)</li>
-      </ol>
+        {token && me && hasPerm(me, 'approval:review') && (
+          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
+            <h2 style={{ marginTop: 0 }}>Inbox подписанта</h2>
+            <div style={{ display: 'flex', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+              <button onClick={refreshInbox} style={{ padding: '8px 12px' }}>Обновить</button>
+              <button disabled={selectedApprovalIds.length === 0} onClick={() => bulk('approve')} style={{ padding: '8px 12px' }}>
+                Массово подписать ({selectedApprovalIds.length})
+              </button>
+              <button disabled={selectedApprovalIds.length === 0} onClick={() => bulk('reject')} style={{ padding: '8px 12px' }}>
+                Массово отклонить ({selectedApprovalIds.length})
+              </button>
+            </div>
+
+            {approvals.length === 0 ? (
+              <div style={{ opacity: 0.8 }}>Нет ожидающих подписей.</div>
+            ) : (
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', background: '#fff', borderRadius: 8 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ padding: 8, borderBottom: '1px solid #eee' }} />
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Сотрудник</th>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Экзамен</th>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Оценка</th>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>От кого</th>
+                      <th style={{ padding: 8, borderBottom: '1px solid #eee' }} />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {approvals.map((a) => (
+                      <tr key={a.id}>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>
+                          <input type="checkbox" checked={selectedApprovalIds.includes(a.id)} onChange={() => toggleApproval(a.id)} />
+                        </td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>
+                          <div><b>{a.examAttempt.person.fullName}</b></div>
+                          <div style={{ fontSize: 12, opacity: 0.75 }}>{a.examAttempt.person.position}{a.examAttempt.person.employeeCode ? ` • ${a.examAttempt.person.employeeCode}` : ''}</div>
+                        </td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.examAttempt.examType.name} ({a.examAttempt.examType.code})</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.examAttempt.grade}</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.examAttempt.createdBy.displayName ?? a.examAttempt.createdBy.email}</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1', textAlign: 'right' }}>
+                          <button onClick={() => approveOne(a.id)} style={{ padding: '6px 10px', marginRight: 8 }}>Подписать</button>
+                          <button onClick={() => rejectOne(a.id)} style={{ padding: '6px 10px' }}>Отклонить</button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        )}
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16
+    image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -26,6 +26,10 @@ services:
       DEV_BOOTSTRAP: ${DEV_BOOTSTRAP}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      CREATOR_EMAIL: ${CREATOR_EMAIL}
+      CREATOR_PASSWORD: ${CREATOR_PASSWORD}
+      SIGNER_EMAIL: ${SIGNER_EMAIL}
+      SIGNER_PASSWORD: ${SIGNER_PASSWORD}
     depends_on:
       db:
         condition: service_healthy
@@ -56,6 +60,10 @@ services:
       DEV_BOOTSTRAP: ${DEV_BOOTSTRAP}
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      CREATOR_EMAIL: ${CREATOR_EMAIL}
+      CREATOR_PASSWORD: ${CREATOR_PASSWORD}
+      SIGNER_EMAIL: ${SIGNER_EMAIL}
+      SIGNER_PASSWORD: ${SIGNER_PASSWORD}
     depends_on:
       db:
         condition: service_healthy
