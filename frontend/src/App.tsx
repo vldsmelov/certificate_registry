@@ -62,6 +62,8 @@ type ApprovalInboxItem = {
   id: string;
   status: string;
   createdAt: string;
+  isRevision?: boolean;
+  note?: string | null;
   examAttempt: {
     id: string;
     attemptNo: number;
@@ -140,6 +142,18 @@ export default function App() {
   const [selectedCert, setSelectedCert] = useState<CertInternalView | null>(null);
   const [selectedCertPublicId, setSelectedCertPublicId] = useState<string | null>(null);
 
+  // Certificates modal + edit
+  const [certModalOpen, setCertModalOpen] = useState(false);
+  const [certEditMode, setCertEditMode] = useState(false);
+  const [certEditFullName, setCertEditFullName] = useState('');
+  const [certEditPosition, setCertEditPosition] = useState('');
+  const [certEditEmployeeCode, setCertEditEmployeeCode] = useState<string>('');
+  const [certEditValidityType, setCertEditValidityType] = useState<'fixed_date' | 'duration' | 'perpetual'>('duration');
+  const [certEditValidityMonths, setCertEditValidityMonths] = useState<number>(36);
+  const [certEditValidTo, setCertEditValidTo] = useState<string>('');
+  const [certEditTemplateVersionId, setCertEditTemplateVersionId] = useState<string>('');
+  const [certEditNote, setCertEditNote] = useState<string>('');
+
 
 // Tabs (UI)
 const availableTabs = useMemo(() => {
@@ -168,6 +182,16 @@ function fmtDate(v?: string | null) {
   return d.toLocaleDateString('ru-RU');
 }
 
+function toDateInputValue(v?: string | null) {
+  if (!v) return '';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return '';
+  const yyyy = String(d.getFullYear());
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}`;
+}
+
 function gradeBadge(g: string) {
   const gg = (g || '').toLowerCase();
   if (gg === 'gold') return { text: 'Gold', cls: 'warning' };
@@ -177,6 +201,7 @@ function gradeBadge(g: string) {
 }
 
 function certStatusBadge(status: string, expired?: boolean) {
+  if (status === 'pending') return { text: 'В процессе согласования', cls: 'info' };
   if (status === 'revoked') return { text: 'Отозван', cls: 'danger' };
   if (status === 'annulled') return { text: 'Аннулирован', cls: 'danger' };
   if (expired) return { text: 'Истёк', cls: 'warning' };
@@ -516,9 +541,66 @@ function certStatusBadge(status: string, expired?: boolean) {
   async function openCert(publicId: string) {
     setSelectedCertPublicId(publicId);
     setSelectedCert(null);
+    setCertModalOpen(true);
+    setCertEditMode(false);
     try {
       const data = await apiFetch<CertInternalView>(`/certs/inner/${publicId}`);
       setSelectedCert(data);
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  function closeCertModal() {
+    setCertModalOpen(false);
+    setCertEditMode(false);
+  }
+
+  function beginEditCert() {
+    if (!selectedCert || selectedCert.status !== 'ok') return;
+    const c: any = selectedCert.certificate;
+    const p: any = selectedCert.attempt?.person ?? {};
+    setCertEditFullName(p.fullName ?? '');
+    setCertEditPosition(p.position ?? '');
+    setCertEditEmployeeCode(p.employeeCode ?? '');
+    setCertEditValidityType((c.validityType ?? 'duration') as any);
+    setCertEditValidityMonths(Number(c.validityMonths ?? 36));
+    setCertEditValidTo(toDateInputValue(c.validTo));
+    setCertEditTemplateVersionId(String((c.snapshot?.templateVersionId ?? '') ?? ''));
+    setCertEditNote('');
+    setCertEditMode(true);
+  }
+
+  async function saveCertEdit() {
+    if (!selectedCertPublicId) return;
+    setActionErr(null);
+    try {
+      const payload: any = {
+        fullName: certEditFullName.trim(),
+        position: certEditPosition.trim(),
+        employeeCode: certEditEmployeeCode.trim() ? certEditEmployeeCode.trim() : null,
+        validityType: certEditValidityType,
+        note: certEditNote.trim() ? certEditNote.trim() : null,
+        templateVersionId: certEditTemplateVersionId ? certEditTemplateVersionId : null,
+      };
+      if (certEditValidityType === 'duration') {
+        payload.validityMonths = Number(certEditValidityMonths || 0);
+      } else if (certEditValidityType === 'fixed_date') {
+        payload.validTo = certEditValidTo || null;
+      }
+
+      await apiFetch(`/api/internal/certs/${selectedCertPublicId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      flashOk('Изменения сохранены: отправлено на подпись');
+      setCertEditMode(false);
+      await openCert(selectedCertPublicId);
+      await refreshInbox();
+      await refreshMine();
+      await refreshCerts(certRegistry?.page ?? 1);
     } catch (e: any) {
       setActionErr(String(e?.message ?? e));
     }
@@ -1052,11 +1134,19 @@ function certStatusBadge(status: string, expired?: boolean) {
                                     <input type="checkbox" checked={selectedApprovalIds.includes(a.id)} onChange={() => toggleApproval(a.id)} />
                                   </td>
                                   <td>
-                                    <div style={{ fontWeight: 800 }}>{a.examAttempt.person.fullName}</div>
+                                    <div className="row" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
+                                      <div style={{ fontWeight: 800 }}>{a.examAttempt.person.fullName}</div>
+                                      {a.isRevision && <span className="badge info">Изменения</span>}
+                                    </div>
                                     <div className="muted" style={{ fontSize: 12 }}>
                                       {a.examAttempt.person.position}
                                       {a.examAttempt.person.employeeCode ? ` • ${a.examAttempt.person.employeeCode}` : ''}
                                     </div>
+                                    {a.isRevision && a.note ? (
+                                      <div className="muted" style={{ fontSize: 12 }}>
+                                        Комментарий: {a.note}
+                                      </div>
+                                    ) : null}
                                   </td>
                                   <td>
                                     {a.examAttempt.examType.name} <span className="muted">({a.examAttempt.examType.code})</span>
@@ -1085,7 +1175,7 @@ function certStatusBadge(status: string, expired?: boolean) {
               )}
 
               {activeTab === 'certs' && hasPerm(me, 'certificate:view_internal') && (
-                <div className="grid grid-2" style={{ marginTop: 10 }}>
+                <div className="grid" style={{ marginTop: 10 }}>
                   <section className="card">
                     <div className="card-header">
                       <div>
@@ -1117,6 +1207,7 @@ function certStatusBadge(status: string, expired?: boolean) {
                           <label>Статус</label>
                           <select className="select" value={certStatus} onChange={(e) => setCertStatus(e.target.value)}>
                             <option value="">(любой)</option>
+                            <option value="pending">pending</option>
                             <option value="issued">issued</option>
                             <option value="revoked">revoked</option>
                             <option value="annulled">annulled</option>
@@ -1260,73 +1351,175 @@ function certStatusBadge(status: string, expired?: boolean) {
                     </div>
                   </section>
 
-                  <section className="card">
-                    <div className="card-header">
-                      <div>
-                        <h2 style={{ margin: 0 }}>Карточка сертификата</h2>
-                        <div className="muted" style={{ marginTop: 4 }}>
-                          Выберите сертификат в реестре или из списка попыток.
-                        </div>
-                      </div>
-                      {selectedCertPublicId ? (
-                        <div className="row">
-                          <button className="btn" onClick={() => openCert(selectedCertPublicId)} type="button">
-                            Обновить
-                          </button>
-                          <button className="btn btn-ghost" onClick={() => downloadPdf(selectedCertPublicId)} type="button">
-                            PDF
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-
-                    {!selectedCert ? (
-                      <div className="muted">Пока ничего не выбрано.</div>
-                    ) : selectedCert.status === 'not_found' ? (
-                      <div className="alert err">Сертификат не найден.</div>
-                    ) : (
-                      <div className="grid" style={{ gap: 12 }}>
-                        <div className="row" style={{ flexWrap: 'wrap' }}>
-                          <span className="badge info">{selectedCert.certificate.certificateNumber}</span>
-                          <span className={`badge ${certStatusBadge(selectedCert.certificate.status, selectedCert.certificate.expired).cls}`}>
-                            {certStatusBadge(selectedCert.certificate.status, selectedCert.certificate.expired).text}
-                          </span>
-                          <span className="badge neutral">
-                            issued {fmtDate(selectedCert.certificate.issuedAt)}
-                          </span>
-                          {selectedCert.certificate.validTo ? (
-                            <span className="badge neutral">valid to {fmtDate(selectedCert.certificate.validTo)}</span>
-                          ) : (
-                            <span className="badge neutral">бессрочно</span>
-                          )}
-                        </div>
-
-                        {selectedCert.certificate.template ? (
-                          <div className="muted" style={{ fontSize: 13 }}>
-                            Шаблон: <b>{selectedCert.certificate.template.name}</b> v{selectedCert.certificate.template.version}
+                  {certModalOpen && (
+                    <div
+                      className="modal-backdrop"
+                      onMouseDown={(e) => {
+                        if (e.target === e.currentTarget) closeCertModal();
+                      }}
+                    >
+                      <div className="modal">
+                        <div className="modal-head">
+                          <div>
+                            <h2 style={{ margin: 0 }}>Карточка сертификата</h2>
+                            <div className="muted" style={{ marginTop: 4 }}>
+                              {selectedCertPublicId ? `ID: ${selectedCertPublicId}` : ''}
+                            </div>
                           </div>
-                        ) : (
-                          <div className="muted" style={{ fontSize: 13 }}>Шаблон: (по умолчанию)</div>
-                        )}
-
-                        {hasPerm(me, 'certificate:revoke') && selectedCert.certificate.status === 'issued' && (
                           <div className="row">
-                            <button className="btn btn-danger" onClick={() => revokeCert(selectedCert.certificate.publicId)} type="button">
-                              Отозвать
-                            </button>
-                            <button className="btn btn-danger" onClick={() => annulCert(selectedCert.certificate.publicId)} type="button">
-                              Аннулировать
+                            {selectedCertPublicId && (
+                              <>
+                                <button className="btn" onClick={() => openCert(selectedCertPublicId)} type="button">
+                                  Обновить
+                                </button>
+                                <button className="btn btn-ghost" onClick={() => downloadPdf(selectedCertPublicId)} type="button">
+                                  PDF
+                                </button>
+                              </>
+                            )}
+                            <button className="btn" onClick={closeCertModal} type="button">
+                              Закрыть
                             </button>
                           </div>
-                        )}
-
-                        <div className="card" style={{ padding: 12, boxShadow: 'none' }}>
-                          <h3 style={{ marginTop: 0 }}>Данные (JSON)</h3>
-                          <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(selectedCert, null, 2)}</pre>
                         </div>
+
+                        {!selectedCert ? (
+                          <div className="muted">Загрузка...</div>
+                        ) : selectedCert.status === 'not_found' ? (
+                          <div className="alert err">Сертификат не найден.</div>
+                        ) : (
+                          <div className="grid" style={{ gap: 12 }}>
+                            <div className="row" style={{ flexWrap: 'wrap' }}>
+                              <span className="badge info">{selectedCert.certificate.certificateNumber}</span>
+                              <span
+                                className={`badge ${certStatusBadge(selectedCert.certificate.status, selectedCert.certificate.expired).cls}`}
+                              >
+                                {certStatusBadge(selectedCert.certificate.status, selectedCert.certificate.expired).text}
+                              </span>
+                              <span className="badge neutral">issued {fmtDate(selectedCert.certificate.issuedAt)}</span>
+                              {selectedCert.certificate.validTo ? (
+                                <span className="badge neutral">valid to {fmtDate(selectedCert.certificate.validTo)}</span>
+                              ) : (
+                                <span className="badge neutral">бессрочно</span>
+                              )}
+                            </div>
+
+                            {selectedCert.certificate.template ? (
+                              <div className="muted" style={{ fontSize: 13 }}>
+                                Шаблон: <b>{selectedCert.certificate.template.name}</b> v{selectedCert.certificate.template.version}
+                              </div>
+                            ) : (
+                              <div className="muted" style={{ fontSize: 13 }}>Шаблон: (по умолчанию)</div>
+                            )}
+
+                            <div className="row">
+                              {hasPerm(me, 'certificate:edit') && ['issued', 'pending'].includes(String(selectedCert.certificate.status)) && (
+                                <button className="btn btn-primary" onClick={beginEditCert} type="button">
+                                  Редактировать
+                                </button>
+                              )}
+                              {hasPerm(me, 'certificate:revoke') && String(selectedCert.certificate.status) === 'issued' && (
+                                <>
+                                  <button className="btn btn-danger" onClick={() => revokeCert(selectedCert.certificate.publicId, 'revoke')} type="button">
+                                    Отозвать
+                                  </button>
+                                  <button className="btn btn-danger" onClick={() => revokeCert(selectedCert.certificate.publicId, 'annul')} type="button">
+                                    Аннулировать
+                                  </button>
+                                </>
+                              )}
+                              <a className="btn btn-ghost" href={`${apiUrl}/certs/outer/${selectedCert.certificate.publicId}`} target="_blank" rel="noreferrer">
+                                Verify
+                              </a>
+                            </div>
+
+                            {certEditMode && (
+                              <div className="card" style={{ padding: 14, boxShadow: 'none' }}>
+                                <h3 style={{ marginTop: 0 }}>Редактирование</h3>
+                                <div className="grid" style={{ gap: 12 }}>
+                                  <div className="row">
+                                    <div className="field" style={{ flex: 1, minWidth: 260 }}>
+                                      <label>ФИО</label>
+                                      <input className="input" value={certEditFullName} onChange={(e) => setCertEditFullName(e.target.value)} />
+                                    </div>
+                                    <div className="field" style={{ flex: 1, minWidth: 220 }}>
+                                      <label>Должность</label>
+                                      <input className="input" value={certEditPosition} onChange={(e) => setCertEditPosition(e.target.value)} />
+                                    </div>
+                                    <div className="field" style={{ minWidth: 200 }}>
+                                      <label>Код сотрудника</label>
+                                      <input className="input" value={certEditEmployeeCode} onChange={(e) => setCertEditEmployeeCode(e.target.value)} placeholder="(опционально)" />
+                                    </div>
+                                  </div>
+
+                                  <div className="row">
+                                    <div className="field">
+                                      <label>Срок</label>
+                                      <select className="select" value={certEditValidityType} onChange={(e) => setCertEditValidityType(e.target.value as any)}>
+                                        <option value="duration">на срок</option>
+                                        <option value="fixed_date">до даты</option>
+                                        <option value="perpetual">бессрочный</option>
+                                      </select>
+                                    </div>
+                                    {certEditValidityType === 'duration' && (
+                                      <div className="field">
+                                        <label>Месяцев</label>
+                                        <input className="input" type="number" min={1} value={certEditValidityMonths} onChange={(e) => setCertEditValidityMonths(Number(e.target.value))} />
+                                      </div>
+                                    )}
+                                    {certEditValidityType === 'fixed_date' && (
+                                      <div className="field">
+                                        <label>Действует до</label>
+                                        <input className="input" type="date" value={certEditValidTo} onChange={(e) => setCertEditValidTo(e.target.value)} />
+                                      </div>
+                                    )}
+                                    <div className="field" style={{ flex: 1, minWidth: 260 }}>
+                                      <label>Шаблон</label>
+                                      <select className="select" value={certEditTemplateVersionId} onChange={(e) => setCertEditTemplateVersionId(e.target.value)}>
+                                        <option value="">(по умолчанию)
+                                        </option>
+                                        {templateVersions.map((tv) => (
+                                          <option key={tv.id} value={tv.id}>
+                                            {tv.template.name} v{tv.version}
+                                          </option>
+                                        ))}
+                                      </select>
+                                    </div>
+                                  </div>
+
+                                  <div className="field">
+                                    <label>Комментарий для подписанта (опционально)</label>
+                                    <textarea className="textarea" value={certEditNote} onChange={(e) => setCertEditNote(e.target.value)} placeholder="Например: исправлена должность / ФИО" />
+                                  </div>
+
+                                  <div className="row">
+                                    <button className="btn btn-primary" onClick={saveCertEdit} type="button">
+                                      Сохранить и отправить на подпись
+                                    </button>
+                                    <button className="btn" onClick={() => setCertEditMode(false)} type="button">
+                                      Отмена
+                                    </button>
+                                    <div className="muted" style={{ fontSize: 12 }}>
+                                      После сохранения статус станет <b>pending</b>, во внешнем контуре будет “в процессе согласования”.
+                                    </div>
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            <details>
+                              <summary className="muted" style={{ cursor: 'pointer' }}>
+                                Данные (JSON)
+                              </summary>
+                              <div className="card" style={{ padding: 12, boxShadow: 'none', marginTop: 10 }}>
+                                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(selectedCert, null, 2)}</pre>
+                              </div>
+                            </details>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </section>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1444,7 +1637,7 @@ function certStatusBadge(status: string, expired?: boolean) {
       </main>
 
       <footer className="footer">
-        <div className="footer-inner">by "Цифровизация проетных задач"</div>
+        <div className="footer-inner">by "Цифровизация проектных задач"</div>
       </footer>
     </div>
   );

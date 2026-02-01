@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards, Req, Res, InternalServerErrorException } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Patch, UseGuards, Req, Res, InternalServerErrorException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../rbac/permissions.guard';
 import { RequirePermissions } from '../rbac/permissions.decorator';
@@ -33,6 +33,27 @@ export class CertsInternalController {
   async annul(@Param('publicId') publicId: string, @Req() req: any, @Body() body: { reason?: string | null }) {
     const userId = req.user?.id;
     return this.certificates.setRevocation(publicId, userId, 'annulled', body?.reason ?? null);
+  }
+
+  // Edit certificate + send for re-signing (revision flow)
+  @Patch('/api/internal/certs/:publicId')
+  @RequirePermissions('certificate:edit')
+  async editAndResubmit(
+    @Param('publicId') publicId: string,
+    @Req() req: any,
+    @Body() body: {
+      fullName?: string;
+      position?: string;
+      employeeCode?: string | null;
+      validityType?: 'fixed_date' | 'duration' | 'perpetual';
+      validityMonths?: number | null;
+      validTo?: string | null;
+      templateVersionId?: string | null;
+      note?: string | null;
+    },
+  ) {
+    const userId = req.user?.id;
+    return this.certificates.editAndResubmit(publicId, userId, body);
   }
 
   // Internal PDF: on-demand generation (no storage)

@@ -101,6 +101,7 @@ export class BootstrapService implements OnModuleInit {
       'approval:reject',
       'approval:bulk_action',
       'certificate:view_internal',
+      'certificate:edit',
       'certificate:revoke',
       'export:run',
       'templates:manage',
@@ -120,6 +121,7 @@ export class BootstrapService implements OnModuleInit {
       'exam:submit',
       'users:read',
       'certificate:view_internal',
+      'certificate:edit',
     ]);
     await this.ensureRoleWithPermissions('signer', 'Signer', [
       'approval:review',

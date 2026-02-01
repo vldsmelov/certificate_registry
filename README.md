@@ -104,20 +104,38 @@ New env vars:
 - `TEMPLATE_STORAGE_DIR` — where template backgrounds are stored in the backend container (`/app/data/templates` by default)
 - `PUBLIC_VERIFY_BASE_URL` — base URL used for QR/verify links (default `http://localhost:3000`)
 
-## Next iterations
-
-### Iteration 5: Certificate registry (filters/search) + CSV export ✅
+## Iteration 5: Certificate registry (filters/search) + CSV export ✅
 
 - **Registry list**:
   - `GET /api/internal/certificates` (JWT + `certificate:view_internal`)
-    - supports: `q`, `status` (issued/revoked/annulled/expired), `grade`, `examTypeId`, `validity` (active/expired), `issuedFrom/issuedTo`, `examFrom/examTo`, `page`, `pageSize`
+    - supports: `q`, `status` (issued/revoked/annulled/expired/pending), `grade`, `examTypeId`, `validity` (active/expired), `issuedFrom/issuedTo`, `examFrom/examTo`, `page`, `pageSize`
 - **CSV export** (same filters):
   - `GET /api/internal/certificates/export.csv` (JWT + `export:run`)
     - limit: 5000 rows per export
 
-6) Notifications (Outbox + email provider)
+## Iteration 6: UI/UX polish ✅
+
+- Unified layout with top navigation tabs
+- White / blue / light-blue palette
+- Cleaner tables, forms, status badges
+- Footer on every page: `by "Цифровизация проектных задач"`
+
+## Iteration 7: Modal certificate card + edit & re-sign (pending) ✅
+
+- Certificate card opens as **modal overlay** above the registry (close to return to list)
+- **Edit issued certificate** (keeps the same certificate number + publicId):
+  - `PATCH /api/internal/certs/:publicId` (JWT + `certificate:edit`)
+  - sets certificate status to `pending`
+  - moves related attempt back to `submitted`
+  - creates a new approval for the signer with `isRevision=true`
+- Public verify reflects pending state:
+  - `GET /certs/outer/:publicId` → `{ status: "pending", message: "в процессе согласования" }`
+
+## Upcoming
+
+- Notifications (Outbox + email provider)
 
 ## Notes
 
-- No PDF files are stored. Certificates will be generated on demand in the internal contour.
+- No PDF files are stored. Certificates are generated on demand in the internal contour.
 - Public contour exposes only validity status (no personal data).

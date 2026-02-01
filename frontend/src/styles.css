@@ -326,3 +326,40 @@ label{
   align-items:center;
   justify-content: center;
 }
+
+/* Modal (certificate card overlay) */
+.modal-backdrop{
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 25, 55, 0.35);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 24px 16px;
+  z-index: 50;
+}
+
+.modal{
+  width: min(980px, 100%);
+  background: rgba(255,255,255,0.98);
+  border: 1px solid rgba(0,0,0,0.06);
+  border-radius: 22px;
+  box-shadow: 0 18px 60px rgba(0,0,0,0.22);
+  padding: 16px;
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.modal-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid rgba(0,0,0,0.06);
+}
+
+@media (max-width: 640px){
+  .modal-head{ flex-direction: column; align-items: stretch; }
+}

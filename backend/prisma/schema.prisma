@@ -14,6 +14,7 @@ enum Grade {
 }
 
 enum CertificateStatus {
+  pending
   issued
   revoked
   annulled
@@ -59,6 +60,9 @@ model AppUser {
 
   // Certificates this user revoked/annulled
   revokedCertificates Certificate[] @relation("CertificateRevokedBy")
+
+  // Certificates this user edited (revision flow)
+  editedCertificates  Certificate[] @relation("CertificateEditedBy")
 }
 
 model Role {
@@ -176,6 +180,10 @@ model Approval {
   examAttemptId String
   signerUserId  String
   status        ApprovalStatus @default(pending)
+  // True if this approval was created after editing an already issued certificate
+  isRevision    Boolean        @default(false)
+  // Optional note shown to signer for revision approvals
+  note          String?
   reason        String?
   decidedAt     DateTime?
   createdAt     DateTime       @default(now())
@@ -211,6 +219,12 @@ model Certificate {
   // Template used for deterministic PDF generation
   templateVersionId  String?
   templateVersion    TemplateVersion? @relation("CertificateTemplateVersion", fields: [templateVersionId], references: [id], onDelete: SetNull)
+
+  // Revision info (when an issued certificate was edited and sent for re-sign)
+  editedAt           DateTime?
+  editedById         String?
+  editNote           String?
+  editedBy           AppUser?          @relation("CertificateEditedBy", fields: [editedById], references: [id], onDelete: SetNull)
 
   // Certificate belongs to a specific attempt
   examAttemptId     String            @unique

@@ -63,7 +63,7 @@ export class CertificatesService {
     const wantsExpired = (status === 'expired') || (validity === 'expired');
     const wantsActive = validity === 'active';
 
-    if (status && ['issued', 'revoked', 'annulled'].includes(status)) {
+    if (status && ['issued', 'pending', 'revoked', 'annulled'].includes(status)) {
       where.status = status as any;
     }
 
@@ -206,7 +206,17 @@ export class CertificatesService {
     if (attempt.grade === 'fail') throw new BadRequestException('Failed attempt cannot have a certificate');
 
     const existing = await tx.certificate.findUnique({ where: { examAttemptId: attempt.id } });
-    if (existing) return existing;
+    if (existing) {
+      // Revision flow: certificate exists but was moved back to pending after edits.
+      // When signer approves again, we simply mark it as issued (keeping number/publicId).
+      if (existing.status === ('pending' as any)) {
+        return tx.certificate.update({
+          where: { id: existing.id },
+          data: { status: 'issued' as any },
+        });
+      }
+      return existing;
+    }
 
     const issuedAt = new Date();
     const year = issuedAt.getUTCFullYear();
@@ -293,8 +303,9 @@ export class CertificatesService {
     const now = new Date();
     const expired = cert.validTo ? now > cert.validTo : false;
 
-    let status: 'valid' | 'expired' | 'revoked' | 'annulled' = 'valid';
-    if (cert.status === 'revoked') status = 'revoked';
+    let status: 'valid' | 'expired' | 'revoked' | 'annulled' | 'pending' = 'valid';
+    if (cert.status === 'pending') status = 'pending';
+    else if (cert.status === 'revoked') status = 'revoked';
     else if (cert.status === 'annulled') status = 'annulled';
     else if (expired) status = 'expired';
 
@@ -302,6 +313,7 @@ export class CertificatesService {
 
     return {
       status,
+      message: status === 'pending' ? 'в процессе согласования' : undefined,
       certificateNumber: cert.certificateNumber,
       grade: cert.grade,
       issuedAt: cert.issuedAt,
@@ -313,6 +325,142 @@ export class CertificatesService {
       },
       signerName: snap.signerName ?? null,
     };
+  }
+
+  /**
+   * Edit an already issued certificate and send it for re-signing.
+   * Keeps the certificateNumber + publicId, but moves status back to `pending`.
+   */
+  async editAndResubmit(publicId: string, actorUserId: string, payload: {
+    fullName?: string;
+    position?: string;
+    employeeCode?: string | null;
+    validityType?: 'fixed_date' | 'duration' | 'perpetual';
+    validityMonths?: number | null;
+    validTo?: string | null;
+    templateVersionId?: string | null;
+    note?: string | null;
+  }) {
+    const cert = await this.prisma.certificate.findUnique({
+      where: { publicId },
+      include: {
+        examAttempt: { include: { person: true, examType: true, signerUser: true } },
+      },
+    });
+    if (!cert) throw new NotFoundException('Certificate not found');
+
+    if (!['issued', 'pending'].includes(String(cert.status))) {
+      throw new BadRequestException(`Only issued/pending certificates can be edited (status=${cert.status})`);
+    }
+    if (!cert.examAttempt?.signerUserId) {
+      throw new BadRequestException('Certificate has no signer assigned');
+    }
+
+    const now = new Date();
+    const validityType = (payload.validityType ?? cert.validityType) as any;
+    let validityMonths: number | null = payload.validityMonths ?? (cert.validityMonths as any) ?? null;
+    let validTo: Date | null = cert.validTo as any;
+
+    if (validityType === 'perpetual') {
+      validityMonths = null;
+      validTo = null;
+    } else if (validityType === 'duration') {
+      if (!validityMonths || validityMonths <= 0) {
+        throw new BadRequestException('validityMonths must be provided for duration validity');
+      }
+      // Keep existing validTo unless explicitly provided
+      if (payload.validTo) {
+        const d = new Date(payload.validTo);
+        if (Number.isNaN(d.getTime())) throw new BadRequestException('validTo is invalid date');
+        validTo = d;
+      }
+    } else if (validityType === 'fixed_date') {
+      if (!payload.validTo) throw new BadRequestException('validTo must be provided for fixed_date validity');
+      const d = new Date(payload.validTo);
+      if (Number.isNaN(d.getTime())) throw new BadRequestException('validTo is invalid date');
+      validityMonths = null;
+      validTo = d;
+    }
+
+    const templateVersionId = payload.templateVersionId ?? cert.templateVersionId ?? null;
+    const note = (payload.note ?? '').trim() || null;
+
+    // Update render snapshot (used for deterministic internal PDF)
+    const snap: any = cert.renderSnapshotJson ?? {};
+    const nextSnap = {
+      ...snap,
+      fullName: payload.fullName ?? cert.examAttempt.person.fullName,
+      position: payload.position ?? cert.examAttempt.person.position,
+      employeeCode: payload.employeeCode === undefined ? cert.examAttempt.person.employeeCode : payload.employeeCode,
+      validityType,
+      validityMonths,
+      validTo: validTo ? validTo.toISOString() : null,
+      templateVersionId,
+      editedAt: now.toISOString(),
+      editedByUserId: actorUserId,
+      editNote: note,
+    };
+
+    return this.prisma.$transaction(async (tx) => {
+      // Update person data
+      await tx.person.update({
+        where: { id: cert.examAttempt.personId },
+        data: {
+          fullName: payload.fullName ?? cert.examAttempt.person.fullName,
+          position: payload.position ?? cert.examAttempt.person.position,
+          employeeCode: payload.employeeCode === undefined ? cert.examAttempt.person.employeeCode : payload.employeeCode,
+        },
+      });
+
+      // Update attempt template (if changed) and move back to submitted
+      await tx.examAttempt.update({
+        where: { id: cert.examAttemptId },
+        data: {
+          status: 'submitted' as any,
+          templateVersionId: templateVersionId ?? undefined,
+        },
+      });
+
+      // Close existing pending approvals (avoid duplicates)
+      await tx.approval.updateMany({
+        where: { examAttemptId: cert.examAttemptId, status: 'pending' as any },
+        data: { status: 'rejected' as any, decidedAt: now, reason: 'superseded by edit' },
+      });
+
+      // Move certificate back to pending and store revision metadata
+      const updatedCert = await tx.certificate.update({
+        where: { id: cert.id },
+        data: {
+          status: 'pending' as any,
+          validityType: validityType as any,
+          validityMonths,
+          validTo,
+          templateVersionId: templateVersionId ?? undefined,
+          renderSnapshotJson: nextSnap as any,
+          editedAt: now,
+          editedById: actorUserId,
+          editNote: note,
+        },
+      });
+
+      const signerUserId = cert.examAttempt.signerUserId;
+      if (!signerUserId) {
+        throw new BadRequestException('Signer is not set for this attempt');
+      }
+
+      // Create a new approval for signer
+      const approval = await tx.approval.create({
+        data: {
+          examAttemptId: cert.examAttemptId,
+          signerUserId: signerUserId,
+          status: 'pending' as any,
+          isRevision: true,
+          note: note ?? 'Внесены изменения',
+        },
+      });
+
+      return { status: 'ok' as const, certificate: updatedCert, approvalId: approval.id };
+    });
   }
 
   async getInternalView(publicId: string) {
