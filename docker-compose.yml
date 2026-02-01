@@ -1,6 +1,6 @@
 services:
   db:
-    image: postgres:16-alpine
+    image: postgres:16
     environment:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_USER: ${POSTGRES_USER}
@@ -39,18 +39,22 @@ services:
       - "5173:5173"
     restart: unless-stopped
 
+  seed:
+    profiles: ["seed"]
+    build:
+      context: ./backend
+    environment:
+      PORT: ${BACKEND_PORT}
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+    command:
+      [
+        "sh",
+        "-c",
+        "npx prisma migrate deploy && node -e \"console.log('Running seed...')\" && npx ts-node prisma/seed.ts"
+      ]
+
 volumes:
   db_data:
-
-
-seed:
-  profiles: ["seed"]
-  build:
-    context: ./backend
-  environment:
-    PORT: ${BACKEND_PORT}
-    DATABASE_URL: ${DATABASE_URL}
-  depends_on:
-    db:
-      condition: service_healthy
-  command: ["sh", "-c", "npx prisma migrate deploy && node -e \"console.log('Running seed...')\" && npx ts-node prisma/seed.ts"]
