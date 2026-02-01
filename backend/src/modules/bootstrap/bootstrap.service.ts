@@ -23,7 +23,7 @@ export class BootstrapService implements OnModuleInit {
 
     const users = await this.bootstrapRbacAndUsers();
     await this.bootstrapExamTypes();
-    await this.bootstrapDemoCertificate();
+    await this.bootstrapDemoCertificate(users.adminUserId, users.signerUserId);
     await this.bootstrapDemoAttempt(users.creatorUserId, users.signerUserId);
   }
 
@@ -100,6 +100,7 @@ export class BootstrapService implements OnModuleInit {
       'approval:reject',
       'approval:bulk_action',
       'certificate:view_internal',
+      'certificate:revoke',
       'export:run',
       'templates:manage',
       'users:read',
@@ -117,6 +118,7 @@ export class BootstrapService implements OnModuleInit {
       'exam:edit_own',
       'exam:submit',
       'users:read',
+      'certificate:view_internal',
     ]);
     await this.ensureRoleWithPermissions('signer', 'Signer', [
       'approval:review',
@@ -145,24 +147,33 @@ export class BootstrapService implements OnModuleInit {
   private async bootstrapExamTypes() {
     await this.prisma.examType.upsert({
       where: { code: 'DEMO' },
-      update: {},
-      create: { name: 'Demo Exam', code: 'DEMO' },
+      update: {
+        defaultValidityType: 'perpetual' as any,
+        defaultValidityMonths: 0,
+      },
+      create: { name: 'Demo Exam', code: 'DEMO', defaultValidityType: 'perpetual' as any, defaultValidityMonths: 0 },
     });
     await this.prisma.examType.upsert({
       where: { code: 'SAFE' },
-      update: {},
-      create: { name: 'Safety Basics', code: 'SAFE' },
+      update: {
+        defaultValidityType: 'duration' as any,
+        defaultValidityMonths: 36,
+      },
+      create: { name: 'Safety Basics', code: 'SAFE', defaultValidityType: 'duration' as any, defaultValidityMonths: 36 },
     });
     await this.prisma.examType.upsert({
       where: { code: 'FAID' },
-      update: {},
-      create: { name: 'First Aid', code: 'FAID' },
+      update: {
+        defaultValidityType: 'duration' as any,
+        defaultValidityMonths: 24,
+      },
+      create: { name: 'First Aid', code: 'FAID', defaultValidityType: 'duration' as any, defaultValidityMonths: 24 },
     });
 
     this.logger.log('Exam types ensured: DEMO, SAFE, FAID');
   }
 
-  private async bootstrapDemoCertificate() {
+  private async bootstrapDemoCertificate(adminUserId: string, signerUserId: string) {
     const demoPublicId = 'demo-public-id-12345';
     const existing = await this.prisma.certificate.findUnique({ where: { publicId: demoPublicId } });
     if (existing) {
@@ -173,29 +184,64 @@ export class BootstrapService implements OnModuleInit {
     const examType = await this.prisma.examType.findUnique({ where: { code: 'DEMO' } });
     if (!examType) return;
 
-    const person = await this.prisma.person.create({
-      data: { fullName: 'Иванов Иван Иванович', position: 'Инженер', employeeCode: 'DEMO-001' },
+    const person = await this.prisma.person.upsert({
+      where: { employeeCode: 'DEMO-001' },
+      update: { fullName: 'Иванов Иван Иванович', position: 'Инженер' },
+      create: { fullName: 'Иванов Иван Иванович', position: 'Инженер', employeeCode: 'DEMO-001' },
+    });
+
+    const issuedAt = new Date();
+    const year = issuedAt.getUTCFullYear();
+    const certificateNumber = `${year}-DEMO-000001`;
+
+    // Ensure counter so the next issued DEMO certificate will be 000002
+    await this.prisma.certificateCounter.upsert({
+      where: { examTypeId_year: { examTypeId: examType.id, year } },
+      update: { seq: 1 },
+      create: { examTypeId: examType.id, year, seq: 1 },
+    });
+
+    // Create an approved attempt for the demo certificate
+    const attempt = await this.prisma.examAttempt.create({
+      data: {
+        personId: person.id,
+        examTypeId: examType.id,
+        attemptNo: 1,
+        grade: 'gold' as any,
+        examDate: issuedAt,
+        status: 'approved' as any,
+        signerUserId,
+        createdById: adminUserId,
+        notes: 'DEMO_CERT_ATTEMPT_V1',
+      },
     });
 
     await this.prisma.certificate.create({
       data: {
-        certificateNumber: '2026-DEMO-000001',
+        certificateNumber,
         publicId: demoPublicId,
-        grade: 'gold',
-        status: 'issued',
-        issuedAt: new Date(),
-        validFrom: new Date(),
-        validTo: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365),
-        personId: person.id,
-        examTypeId: examType.id,
+        grade: 'gold' as any,
+        status: 'issued' as any,
+        issuedAt,
+        validityType: examType.defaultValidityType as any,
+        validityMonths: examType.defaultValidityType === 'duration' ? examType.defaultValidityMonths : null,
+        validFrom: issuedAt,
+        validTo: null,
+        examAttemptId: attempt.id,
         renderSnapshotJson: {
           fullName: person.fullName,
           position: person.position,
+          employeeCode: person.employeeCode,
           examTypeName: examType.name,
           examTypeCode: examType.code,
           grade: 'gold',
-          certificateNumber: '2026-DEMO-000001',
+          certificateNumber,
           publicId: demoPublicId,
+          issuedAt: issuedAt.toISOString(),
+          validTo: null,
+          validityType: examType.defaultValidityType,
+          validityMonths: examType.defaultValidityType === 'duration' ? examType.defaultValidityMonths : null,
+          signerName: null,
         },
       },
     });

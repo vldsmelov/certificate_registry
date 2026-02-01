@@ -9,6 +9,7 @@ import { RbacModule } from '../rbac/rbac.module';
 import { ExamTypesModule } from '../exam-types/exam-types.module';
 import { AttemptsModule } from '../attempts/attempts.module';
 import { ApprovalsModule } from '../approvals/approvals.module';
+import { CertificatesModule } from '../certificates/certificates.module';
 
 @Module({
   imports: [
@@ -16,6 +17,7 @@ import { ApprovalsModule } from '../approvals/approvals.module';
     AuthModule,
     RbacModule,
     BootstrapModule,
+    CertificatesModule,
     ExamTypesModule,
     AttemptsModule,
     ApprovalsModule,

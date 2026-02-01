@@ -1,9 +1,10 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { CertificatesService } from '../certificates/certificates.service';
 
 @Injectable()
 export class ApprovalsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly certificates: CertificatesService) {}
 
   async inbox(signerUserId: string) {
     return this.prisma.approval.findMany({
@@ -50,7 +51,12 @@ export class ApprovalsService {
         data: { status: attemptStatus as any },
       });
 
-      return { status: approvalStatus, approval: updatedApproval, attempt: updatedAttempt };
+      let issuedCertificate: any = null;
+      if (opts.action === 'approve') {
+        issuedCertificate = await this.certificates.issueForAttemptTx(tx as any, updatedAttempt.id, opts.signerUserId);
+      }
+
+      return { status: approvalStatus, approval: updatedApproval, attempt: updatedAttempt, certificate: issuedCertificate };
     });
   }
 
@@ -96,12 +102,22 @@ export class ApprovalsService {
         data: { status: attemptStatus as any },
       });
 
-      return { updApprovals, updAttempts };
+      let issued: any[] = [];
+      if (opts.action === 'approve') {
+        // Issue certificates for each approved attempt (idempotent)
+        for (const attemptId of attemptIds) {
+          const c = await this.certificates.issueForAttemptTx(tx as any, attemptId, opts.signerUserId);
+          issued.push({ publicId: c.publicId, certificateNumber: c.certificateNumber });
+        }
+      }
+
+      return { updApprovals, updAttempts, issued };
     });
 
     return {
       updated: res.updApprovals.count,
       skipped: opts.approvalIds.length - res.updApprovals.count,
+      issued: res.issued ?? [],
     };
   }
 }

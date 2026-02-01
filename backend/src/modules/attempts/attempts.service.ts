@@ -24,6 +24,7 @@ export class AttemptsService {
         examType: { select: { id: true, name: true, code: true } },
         signerUser: { select: { id: true, email: true, displayName: true } },
         approvals: { orderBy: { createdAt: 'desc' } },
+        certificate: { select: { publicId: true, certificateNumber: true, status: true, validTo: true } },
       },
     });
   }

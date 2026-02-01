@@ -1,12 +1,11 @@
 FROM node:20-bookworm-slim
 
-# Prisma на Alpine часто падает из-за несовместимого OpenSSL/libssl.
-# Debian-based образ даёт стабильную работу Prisma schema engine.
+WORKDIR /app
+
+# Install OS deps needed by Prisma engines
 RUN apt-get update \
   && apt-get install -y --no-install-recommends openssl ca-certificates \
   && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /app
 
 COPY package.json ./
 COPY tsconfig*.json ./
@@ -21,4 +20,5 @@ RUN npm run build
 ENV NODE_ENV=production
 EXPOSE 3000
 
+# Apply migrations, then start
 CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]

@@ -67,6 +67,7 @@ async function main() {
     'approval:reject',
     'approval:bulk_action',
     'certificate:view_internal',
+    'certificate:revoke',
     'export:run',
     'templates:manage',
     'users:read',
@@ -76,7 +77,7 @@ async function main() {
   for (const code of permissionCodes) await ensurePermission(code);
 
   await ensureRole('admin', 'Admin', permissionCodes);
-  await ensureRole('creator', 'Creator', ['exam:create', 'exam:edit_own', 'exam:submit', 'users:read']);
+  await ensureRole('creator', 'Creator', ['exam:create', 'exam:edit_own', 'exam:submit', 'users:read', 'certificate:view_internal']);
   await ensureRole('signer', 'Signer', ['approval:review', 'approval:approve', 'approval:reject', 'approval:bulk_action']);
 
   const adminEmail = process.env.ADMIN_EMAIL || 'admin@example.com';
@@ -90,28 +91,69 @@ async function main() {
   const creatorId = await ensureUser(creatorEmail, creatorPassword, 'Exam Creator', ['creator']);
   const signerId = await ensureUser(signerEmail, signerPassword, 'Exam Signer', ['signer']);
 
-  await prisma.examType.upsert({ where: { code: 'DEMO' }, update: {}, create: { name: 'Demo Exam', code: 'DEMO' } });
-  await prisma.examType.upsert({ where: { code: 'SAFE' }, update: {}, create: { name: 'Safety Basics', code: 'SAFE' } });
-  await prisma.examType.upsert({ where: { code: 'FAID' }, update: {}, create: { name: 'First Aid', code: 'FAID' } });
+  await prisma.examType.upsert({
+    where: { code: 'DEMO' },
+    update: { defaultValidityType: 'perpetual' as any, defaultValidityMonths: 0 },
+    create: { name: 'Demo Exam', code: 'DEMO', defaultValidityType: 'perpetual' as any, defaultValidityMonths: 0 },
+  });
+  await prisma.examType.upsert({
+    where: { code: 'SAFE' },
+    update: { defaultValidityType: 'duration' as any, defaultValidityMonths: 36 },
+    create: { name: 'Safety Basics', code: 'SAFE', defaultValidityType: 'duration' as any, defaultValidityMonths: 36 },
+  });
+  await prisma.examType.upsert({
+    where: { code: 'FAID' },
+    update: { defaultValidityType: 'duration' as any, defaultValidityMonths: 24 },
+    create: { name: 'First Aid', code: 'FAID', defaultValidityType: 'duration' as any, defaultValidityMonths: 24 },
+  });
 
   // Demo certificate (public verify)
   const publicId = 'demo-public-id-12345';
   const existingCert = await prisma.certificate.findUnique({ where: { publicId } });
   if (!existingCert) {
     const examType = await prisma.examType.findUnique({ where: { code: 'DEMO' } });
-    const person = await prisma.person.create({ data: { fullName: 'Иванов Иван Иванович', position: 'Инженер', employeeCode: 'DEMO-001' } });
+    const person = await prisma.person.upsert({
+      where: { employeeCode: 'DEMO-001' },
+      update: { fullName: 'Иванов Иван Иванович', position: 'Инженер' },
+      create: { fullName: 'Иванов Иван Иванович', position: 'Инженер', employeeCode: 'DEMO-001' },
+    });
+
+    const issuedAt = new Date();
+    const year = issuedAt.getUTCFullYear();
+    const certificateNumber = `${year}-DEMO-000001`;
+
+    await prisma.certificateCounter.upsert({
+      where: { examTypeId_year: { examTypeId: examType!.id, year } },
+      update: { seq: 1 },
+      create: { examTypeId: examType!.id, year, seq: 1 },
+    });
+
+    const attempt = await prisma.examAttempt.create({
+      data: {
+        personId: person.id,
+        examTypeId: examType!.id,
+        attemptNo: 1,
+        grade: 'gold' as any,
+        examDate: issuedAt,
+        status: 'approved' as any,
+        signerUserId: signerId,
+        createdById: adminId,
+        notes: 'DEMO_CERT_ATTEMPT_V1',
+      },
+    });
 
     await prisma.certificate.create({
       data: {
-        certificateNumber: '2026-DEMO-000001',
+        certificateNumber,
         publicId,
-        grade: 'gold',
-        status: 'issued',
-        issuedAt: new Date(),
-        validFrom: new Date(),
-        validTo: new Date(Date.now() + 1000 * 60 * 60 * 24 * 365),
-        personId: person.id,
-        examTypeId: examType?.id,
+        grade: 'gold' as any,
+        status: 'issued' as any,
+        issuedAt,
+        validityType: examType!.defaultValidityType as any,
+        validityMonths: examType!.defaultValidityType === 'duration' ? examType!.defaultValidityMonths : null,
+        validFrom: issuedAt,
+        validTo: null,
+        examAttemptId: attempt.id,
       },
     });
   }

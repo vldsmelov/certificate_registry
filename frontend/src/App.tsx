@@ -20,7 +20,30 @@ type Attempt = {
   examType: { id: string; name: string; code: string };
   signerUser: UserListItem | null;
   approvals: any[];
+  certificate?: { publicId: string; certificateNumber: string; status: string; validTo: string | null } | null;
 };
+
+type CertInternalView =
+  | { status: 'not_found' }
+  | {
+      status: 'ok';
+      certificate: {
+        certificateNumber: string;
+        publicId: string;
+        grade: string;
+        status: string;
+        issuedAt: string;
+        validityType: string;
+        validityMonths: number | null;
+        validFrom: string;
+        validTo: string | null;
+        expired: boolean;
+        revokedAt: string | null;
+        revokeReason: string | null;
+        revokedBy: string | null;
+      };
+      attempt: any;
+    };
 
 type ApprovalInboxItem = {
   id: string;
@@ -64,6 +87,9 @@ export default function App() {
   // UI errors
   const [actionErr, setActionErr] = useState<string | null>(null);
   const [actionOk, setActionOk] = useState<string | null>(null);
+
+  const [selectedCert, setSelectedCert] = useState<CertInternalView | null>(null);
+  const [selectedCertPublicId, setSelectedCertPublicId] = useState<string | null>(null);
 
   async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
     const res = await fetch(`${apiUrl}${path}`, {
@@ -259,10 +285,15 @@ export default function App() {
     setActionErr(null);
     setActionOk(null);
     try {
-      await apiFetch(`/approvals/${id}/approve`, { method: 'POST' });
-      flashOk('Подписано');
+      const res = await apiFetch<any>(`/approvals/${id}/approve`, { method: 'POST' });
+      if (res?.certificate?.publicId) {
+        flashOk(`Подписано — сертификат ${res.certificate.certificateNumber}`);
+      } else {
+        flashOk('Подписано');
+      }
       setSelectedApprovalIds((prev) => prev.filter((x) => x !== id));
       await refreshInbox();
+      await refreshMine();
     } catch (e: any) {
       setActionErr(String(e?.message ?? e));
     }
@@ -293,14 +324,47 @@ export default function App() {
     setActionErr(null);
     setActionOk(null);
     try {
-      await apiFetch('/approvals/bulk', {
+      const res = await apiFetch<any>('/approvals/bulk', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action, approvalIds: selectedApprovalIds, reason: reason || null }),
       });
-      flashOk(action === 'approve' ? 'Массово подписано' : 'Массово отклонено');
+      if (action === 'approve' && Array.isArray(res?.issued) && res.issued.length) {
+        flashOk(`Массово подписано — выпущено сертификатов: ${res.issued.length}`);
+      } else {
+        flashOk(action === 'approve' ? 'Массово подписано' : 'Массово отклонено');
+      }
       setSelectedApprovalIds([]);
       await refreshInbox();
+      await refreshMine();
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  async function openCert(publicId: string) {
+    setSelectedCertPublicId(publicId);
+    setSelectedCert(null);
+    try {
+      const data = await apiFetch<CertInternalView>(`/certs/inner/${publicId}`);
+      setSelectedCert(data);
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  async function revokeCert(publicId: string, kind: 'revoke' | 'annul') {
+    const reason = window.prompt('Причина (опционально):') ?? '';
+    setActionErr(null);
+    try {
+      await apiFetch(`/api/internal/certs/${publicId}/${kind === 'revoke' ? 'revoke' : 'annul'}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reason: reason || null }),
+      });
+      flashOk(kind === 'revoke' ? 'Отозвано' : 'Аннулировано');
+      await openCert(publicId);
+      await refreshMine();
     } catch (e: any) {
       setActionErr(String(e?.message ?? e));
     }
@@ -473,6 +537,7 @@ export default function App() {
                       <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Оценка</th>
                       <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Статус</th>
                       <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Подписант</th>
+                      <th style={{ textAlign: 'left', padding: 8, borderBottom: '1px solid #eee' }}>Сертификат</th>
                       <th style={{ padding: 8, borderBottom: '1px solid #eee' }} />
                     </tr>
                   </thead>
@@ -488,6 +553,27 @@ export default function App() {
                         <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.grade}</td>
                         <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.status}</td>
                         <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>{a.signerUser ? (a.signerUser.displayName ?? a.signerUser.email) : '—'}</td>
+                        <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1' }}>
+                          {a.certificate ? (
+                            <div style={{ display: 'grid', gap: 6 }}>
+                              <div><b>{a.certificate.certificateNumber}</b> <span style={{ fontSize: 12, opacity: 0.75 }}>({a.certificate.status})</span></div>
+                              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                                <button onClick={() => openCert(a.certificate!.publicId)} style={{ padding: '6px 10px' }}>Внутр. вид</button>
+                                <a
+                                  href={`${apiUrl}/certs/outer/${a.certificate.publicId}`}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style={{ padding: '6px 10px', background: '#fff', border: '1px solid #ddd', borderRadius: 6, textDecoration: 'none', color: 'inherit' }}
+                                >
+                                  Проверка
+                                </a>
+                              </div>
+                              {a.certificate.validTo && <div style={{ fontSize: 12, opacity: 0.75 }}>Действует до: {new Date(a.certificate.validTo).toLocaleDateString()}</div>}
+                            </div>
+                          ) : (
+                            <span style={{ opacity: 0.75 }}>—</span>
+                          )}
+                        </td>
                         <td style={{ padding: 8, borderBottom: '1px solid #f1f1f1', textAlign: 'right' }}>
                           {hasPerm(me, 'exam:submit') && ['draft', 'needs_fix'].includes(a.status) && a.grade !== 'fail' && (
                             <button onClick={() => submitAttempt(a.id)} style={{ padding: '6px 10px' }}>
@@ -499,6 +585,52 @@ export default function App() {
                     ))}
                   </tbody>
                 </table>
+              </div>
+            )}
+          </section>
+        )}
+
+        {token && me && selectedCertPublicId && (
+          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
+            <h2 style={{ marginTop: 0 }}>Просмотр сертификата</h2>
+            <div style={{ marginBottom: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button onClick={() => openCert(selectedCertPublicId)} style={{ padding: '8px 12px' }}>Обновить</button>
+              <a
+                href={`${apiUrl}/certs/outer/${selectedCertPublicId}`}
+                target="_blank"
+                rel="noreferrer"
+                style={{ padding: '8px 12px', background: '#fff', border: '1px solid #ddd', borderRadius: 6, textDecoration: 'none', color: 'inherit' }}
+              >
+                Открыть public verify
+              </a>
+              <button onClick={() => { setSelectedCertPublicId(null); setSelectedCert(null); }} style={{ padding: '8px 12px' }}>
+                Закрыть
+              </button>
+            </div>
+
+            {!selectedCert ? (
+              <div style={{ opacity: 0.8 }}>Загружаю...</div>
+            ) : selectedCert.status === 'not_found' ? (
+              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>Не найдено.</div>
+            ) : (
+              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                  <div>
+                    <div style={{ fontSize: 18 }}><b>{selectedCert.certificate.certificateNumber}</b></div>
+                    <div style={{ fontSize: 13, opacity: 0.75 }}>Статус: {selectedCert.certificate.status}{selectedCert.certificate.expired ? ' (просрочен)' : ''}</div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {hasPerm(me, 'certificate:revoke') && selectedCert.certificate.status === 'issued' && (
+                      <>
+                        <button onClick={() => revokeCert(selectedCertPublicId, 'revoke')} style={{ padding: '8px 12px' }}>Отозвать</button>
+                        <button onClick={() => revokeCert(selectedCertPublicId, 'annul')} style={{ padding: '8px 12px' }}>Аннулировать</button>
+                      </>
+                    )}
+                  </div>
+                </div>
+
+                <hr style={{ margin: '12px 0', border: 'none', borderTop: '1px solid #eee' }} />
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(selectedCert, null, 2)}</pre>
               </div>
             )}
           </section>
