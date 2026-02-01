@@ -68,9 +68,29 @@ Credentials can be changed in `.env`.
 
 The backend seeds a demo **draft** attempt (marker `DEMO_ATTEMPT_V1`) created by the **Creator**, assigned to the **Signer**.
 
+### Iteration 3: Certificate issuance + validity + public verify statuses ✅
+
+When the signer **approves** an attempt, a **Certificate** is issued automatically:
+- unique `certificateNumber` (sequential per year + exam type)
+- `publicId` (used for verification URL)
+- validity (`validityType`, optional `validTo`) calculated from exam type defaults
+
+Public verify route returns one of:
+- `valid`
+- `expired`
+- `revoked`
+- `annulled`
+- `not_found`
+
+Extra internal endpoints (admin):
+- `POST /api/internal/certs/:publicId/revoke`
+- `POST /api/internal/certs/:publicId/annul`
+
+Demo public verification link (bootstrapped):
+- `GET /certs/outer/demo-public-id-12345`
+
 ## Next iterations
 
-3) Certificate issuance (number + validity) + public verify statuses
 4) Templates (multiple templates + versions) + PDF generation on-demand (internal only) + QR linking to outer verify
 5) Export (CSV/XLSX) + advanced filters/search
 6) Notifications (Outbox + email provider)

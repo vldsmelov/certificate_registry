@@ -34,6 +34,12 @@ enum ApprovalStatus {
   rejected
 }
 
+enum ValidityType {
+  fixed_date
+  duration
+  perpetual
+}
+
 model AppUser {
   id           String   @id @default(uuid())
   email        String   @unique
@@ -46,6 +52,9 @@ model AppUser {
   createdAttempts ExamAttempt[] @relation("AttemptCreator")
   signingAttempts ExamAttempt[] @relation("AttemptSigner")
   approvals       Approval[]    @relation("ApprovalSigner")
+
+  // Certificates this user revoked/annulled
+  revokedCertificates Certificate[] @relation("CertificateRevokedBy")
 }
 
 model Role {
@@ -99,7 +108,6 @@ model Person {
   createdAt    DateTime @default(now())
 
   attempts     ExamAttempt[]
-  certificates Certificate[]
 }
 
 model ExamType {
@@ -108,8 +116,16 @@ model ExamType {
   code      String   @unique
   createdAt DateTime @default(now())
 
+  // Default certificate validity rules
+  defaultValidityType   ValidityType @default(duration)
+  defaultValidityMonths Int          @default(36)
+  // Used when defaultValidityType = fixed_date (optional)
+  defaultValidTo        DateTime?
+
   attempts     ExamAttempt[]
-  certificates Certificate[]
+
+  // Counters for sequential certificate numbers
+  counters     CertificateCounter[]
 }
 
 model ExamAttempt {
@@ -165,26 +181,40 @@ model Certificate {
   status            CertificateStatus @default(issued)
 
   issuedAt          DateTime          @default(now())
+  validityType      ValidityType      @default(duration)
+  validityMonths    Int?
+
   validFrom         DateTime          @default(now())
   validTo           DateTime?
+
+  revokedAt         DateTime?
+  revokedById       String?
+  revokeReason      String?
 
   // For deterministic PDF render (internal only)
   renderSnapshotJson Json?
 
-  // Legacy links (kept for demo + transition)
-  personId          String?
-  person            Person?           @relation(fields: [personId], references: [id], onDelete: SetNull)
+  // Certificate belongs to a specific attempt
+  examAttemptId     String            @unique
+  examAttempt       ExamAttempt       @relation(fields: [examAttemptId], references: [id], onDelete: Restrict)
 
-  examTypeId        String?
-  examType          ExamType?         @relation(fields: [examTypeId], references: [id], onDelete: SetNull)
-
-  // Future: certificate belongs to an attempt
-  examAttemptId     String?           @unique
-  examAttempt       ExamAttempt?      @relation(fields: [examAttemptId], references: [id], onDelete: SetNull)
+  revokedBy         AppUser?          @relation("CertificateRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
 
   createdAt         DateTime          @default(now())
 
   @@index([status])
   @@index([issuedAt])
   @@index([validTo])
+}
+
+model CertificateCounter {
+  id        String   @id @default(uuid())
+  examTypeId String
+  year      Int
+  seq       Int
+  updatedAt DateTime @updatedAt
+
+  examType ExamType @relation(fields: [examTypeId], references: [id], onDelete: Cascade)
+
+  @@unique([examTypeId, year])
 }
