@@ -1,0 +1,72 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Grade {
+  gold
+  silver
+  fail
+}
+
+enum CertificateStatus {
+  issued
+  revoked
+  annulled
+}
+
+model AppUser {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+}
+
+model Person {
+  id        String   @id @default(uuid())
+  fullName  String
+  position  String
+  createdAt DateTime @default(now())
+
+  certificates Certificate[]
+}
+
+model ExamType {
+  id        String   @id @default(uuid())
+  name      String
+  code      String   @unique
+  createdAt DateTime @default(now())
+
+  certificates Certificate[]
+}
+
+model Certificate {
+  id                String            @id @default(uuid())
+  certificateNumber String            @unique
+  publicId          String            @unique
+  grade             Grade
+  status            CertificateStatus @default(issued)
+
+  issuedAt          DateTime          @default(now())
+  validFrom         DateTime          @default(now())
+  validTo           DateTime?
+
+  // For later: snapshot for deterministic PDF render
+  renderSnapshotJson Json?
+
+  personId          String?
+  person            Person?           @relation(fields: [personId], references: [id], onDelete: SetNull)
+
+  examTypeId        String?
+  examType          ExamType?         @relation(fields: [examTypeId], references: [id], onDelete: SetNull)
+
+  createdAt         DateTime          @default(now())
+
+  @@index([status])
+  @@index([issuedAt])
+  @@index([validTo])
+}
