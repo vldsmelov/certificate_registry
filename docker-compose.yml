@@ -21,6 +21,11 @@ services:
     environment:
       PORT: ${BACKEND_PORT}
       DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      DEV_BOOTSTRAP: ${DEV_BOOTSTRAP}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
     depends_on:
       db:
         condition: service_healthy
@@ -46,15 +51,15 @@ services:
     environment:
       PORT: ${BACKEND_PORT}
       DATABASE_URL: ${DATABASE_URL}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN}
+      DEV_BOOTSTRAP: ${DEV_BOOTSTRAP}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
     depends_on:
       db:
         condition: service_healthy
-    command:
-      [
-        "sh",
-        "-c",
-        "npx prisma migrate deploy && node -e \"console.log('Running seed...')\" && npx ts-node prisma/seed.ts"
-      ]
+    command: ["sh", "-c", "npx prisma migrate deploy && node -e \"console.log('Running seed...')\" && npx ts-node prisma/seed.ts"]
 
 volumes:
   db_data:

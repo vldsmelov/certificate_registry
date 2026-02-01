@@ -25,6 +25,13 @@ docker compose up --build
 - Frontend: http://localhost:5173
 - Backend health: http://localhost:3000/health
 
+4) Login (Iteration 1):
+- By default the backend bootstraps a dev admin on startup (see `.env`):
+  - email: `admin@example.com`
+  - password: `admin123`
+- Login endpoint: `POST /auth/login`
+- Current user endpoint: `GET /auth/me` (Bearer token)
+
 If `backend` starts before `db` is ready, it will retry Prisma connect automatically (compose also uses a healthcheck).
 
 ## What is implemented in this scaffold
@@ -37,9 +44,18 @@ If `backend` starts before `db` is ready, it will retry Prisma connect automatic
   - Internal view: `/certs/inner/:publicId`
   - Internal PDF stream: `/api/internal/certs/:publicId/pdf` (returns 501 for now)
 
+### Iteration 1: JWT + RBAC (verifiable)
+
+- `POST /auth/login` issues JWT
+- `GET /auth/me` returns current user + permissions
+- Internal contour is protected:
+  - `/certs/inner/:publicId` now requires JWT + `certificate:view_internal` permission
+- Public contour remains open:
+  - `/certs/outer/:publicId`
+
 ## Next iterations (we will implement step-by-step with verifiable results)
 
-1) Auth (JWT) + RBAC permissions + seed admin
+1) Auth (JWT) + RBAC permissions + bootstrapped admin ✅
 2) Exam attempts (create/submit) + approvals inbox + bulk approve/reject
 3) Certificate issuance (number + public_id) + validity (fixed/duration/perpetual) + public verify status
 4) Templates (multiple templates + versions) + PDF generation on-demand (internal only) + QR linking to outer verify

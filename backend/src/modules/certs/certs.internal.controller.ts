@@ -1,7 +1,12 @@
-import { Controller, Get, Param, HttpException, HttpStatus } from '@nestjs/common';
+import { Controller, Get, Param, HttpException, HttpStatus, UseGuards } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { PermissionsGuard } from '../rbac/permissions.guard';
+import { RequirePermissions } from '../rbac/permissions.decorator';
 
 @Controller()
+@UseGuards(JwtAuthGuard, PermissionsGuard)
+@RequirePermissions('certificate:view_internal')
 export class CertsInternalController {
   constructor(private readonly prisma: PrismaService) {}
 
