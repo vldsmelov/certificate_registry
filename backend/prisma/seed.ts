@@ -105,6 +105,57 @@ async function main() {
     where: { code: 'FAID' },
     update: { defaultValidityType: 'duration' as any, defaultValidityMonths: 24 },
     create: { name: 'First Aid', code: 'FAID', defaultValidityType: 'duration' as any, defaultValidityMonths: 24 },
+  // --- Templates (demo) ---
+  const defaultCfg = {
+    page: { orientation: 'landscape' },
+    fields: {
+      title: { x: 60, y: 530, size: 28 },
+      fullName: { x: 60, y: 430, size: 22 },
+      position: { x: 60, y: 390, size: 14 },
+      examTypeName: { x: 60, y: 360, size: 14 },
+      grade: { x: 60, y: 330, size: 14 },
+      certificateNumber: { x: 60, y: 300, size: 14 },
+      issuedAt: { x: 60, y: 270, size: 12 },
+      validTo: { x: 60, y: 245, size: 12 },
+      signerName: { x: 60, y: 200, size: 12 },
+      qr: { x: 670, y: 155, size: 150 },
+      verifyUrl: { x: 60, y: 120, size: 10 },
+    },
+  };
+
+  let template = await prisma.template.findFirst({ where: { name: 'Default Certificate Template' } });
+  if (!template) {
+    template = await prisma.template.create({
+      data: {
+        name: 'Default Certificate Template',
+        description: 'Demo template without background image (text-only).',
+        createdById: adminId,
+      },
+    });
+  }
+
+  let v1 = await prisma.templateVersion.findFirst({ where: { templateId: template.id, version: 1 } });
+  if (!v1) {
+    v1 = await prisma.templateVersion.create({
+      data: {
+        templateId: template.id,
+        version: 1,
+        isActive: true,
+        backgroundPath: null,
+        configJson: defaultCfg as any,
+        createdById: adminId,
+      },
+    });
+  } else if (!v1.isActive) {
+    v1 = await prisma.templateVersion.update({ where: { id: v1.id }, data: { isActive: true, configJson: defaultCfg as any } });
+  }
+
+  // Set default template for exam types (demo)
+  await prisma.examType.updateMany({
+    where: { code: { in: ['DEMO', 'SAFE', 'FAID'] } },
+    data: { defaultTemplateVersionId: v1.id },
+  });
+
   });
 
   // Demo certificate (public verify)
@@ -138,6 +189,7 @@ async function main() {
         status: 'approved' as any,
         signerUserId: signerId,
         createdById: adminId,
+        templateVersionId: v1.id,
         notes: 'DEMO_CERT_ATTEMPT_V1',
       },
     });
@@ -153,6 +205,7 @@ async function main() {
         validityMonths: examType!.defaultValidityType === 'duration' ? examType!.defaultValidityMonths : null,
         validFrom: issuedAt,
         validTo: null,
+        templateVersionId: v1.id,
         examAttemptId: attempt.id,
       },
     });
@@ -179,6 +232,7 @@ async function main() {
         status: 'draft',
         signerUserId: signerId,
         createdById: creatorId,
+        templateVersionId: v1.id,
         notes: marker,
       },
     });

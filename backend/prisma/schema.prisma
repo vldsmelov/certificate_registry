@@ -53,6 +53,10 @@ model AppUser {
   signingAttempts ExamAttempt[] @relation("AttemptSigner")
   approvals       Approval[]    @relation("ApprovalSigner")
 
+  // Templates this user created
+  createdTemplates       Template[]        @relation("TemplateCreator")
+  createdTemplateVersions TemplateVersion[] @relation("TemplateVersionCreator")
+
   // Certificates this user revoked/annulled
   revokedCertificates Certificate[] @relation("CertificateRevokedBy")
 }
@@ -124,8 +128,14 @@ model ExamType {
 
   attempts     ExamAttempt[]
 
+  // Optional default template version for this exam type
+  defaultTemplateVersionId String?
+  defaultTemplateVersion   TemplateVersion? @relation("ExamTypeDefaultTemplate", fields: [defaultTemplateVersionId], references: [id], onDelete: SetNull)
+
   // Counters for sequential certificate numbers
   counters     CertificateCounter[]
+
+  @@index([defaultTemplateVersionId])
 }
 
 model ExamAttempt {
@@ -138,6 +148,8 @@ model ExamAttempt {
   status       AttemptStatus @default(draft)
   signerUserId String?
   createdById  String
+  // Optional template version chosen for certificate issuance
+  templateVersionId String?
   notes        String?
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
@@ -146,6 +158,7 @@ model ExamAttempt {
   examType    ExamType @relation(fields: [examTypeId], references: [id], onDelete: Restrict)
   createdBy   AppUser  @relation("AttemptCreator", fields: [createdById], references: [id], onDelete: Restrict)
   signerUser  AppUser? @relation("AttemptSigner", fields: [signerUserId], references: [id], onDelete: SetNull)
+  templateVersion TemplateVersion? @relation("AttemptTemplateVersion", fields: [templateVersionId], references: [id], onDelete: SetNull)
 
   approvals   Approval[]
   certificate Certificate?
@@ -155,6 +168,7 @@ model ExamAttempt {
   @@index([signerUserId])
   @@index([createdById])
   @@index([examDate])
+  @@index([templateVersionId])
 }
 
 model Approval {
@@ -194,6 +208,10 @@ model Certificate {
   // For deterministic PDF render (internal only)
   renderSnapshotJson Json?
 
+  // Template used for deterministic PDF generation
+  templateVersionId  String?
+  templateVersion    TemplateVersion? @relation("CertificateTemplateVersion", fields: [templateVersionId], references: [id], onDelete: SetNull)
+
   // Certificate belongs to a specific attempt
   examAttemptId     String            @unique
   examAttempt       ExamAttempt       @relation(fields: [examAttemptId], references: [id], onDelete: Restrict)
@@ -205,6 +223,7 @@ model Certificate {
   @@index([status])
   @@index([issuedAt])
   @@index([validTo])
+  @@index([templateVersionId])
 }
 
 model CertificateCounter {
@@ -217,4 +236,38 @@ model CertificateCounter {
   examType ExamType @relation(fields: [examTypeId], references: [id], onDelete: Cascade)
 
   @@unique([examTypeId, year])
+}
+
+
+model Template {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  isArchived  Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  createdById String?
+
+  createdBy AppUser? @relation("TemplateCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  versions  TemplateVersion[]
+}
+
+model TemplateVersion {
+  id            String   @id @default(uuid())
+  templateId    String
+  version       Int
+  isActive      Boolean  @default(true)
+  backgroundPath String?
+  configJson    Json?
+  createdAt     DateTime @default(now())
+  createdById   String?
+
+  template  Template  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  createdBy AppUser?  @relation("TemplateVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  certificates Certificate[] @relation("CertificateTemplateVersion")
+  attempts     ExamAttempt[] @relation("AttemptTemplateVersion")
+  defaultForExamTypes ExamType[] @relation("ExamTypeDefaultTemplate")
+
+  @@unique([templateId, version])
+  @@index([templateId, isActive])
 }

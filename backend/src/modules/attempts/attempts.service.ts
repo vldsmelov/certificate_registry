@@ -8,6 +8,7 @@ export type CreateAttemptInput = {
   grade: 'gold' | 'silver' | 'fail';
   examDate: Date;
   signerUserId: string | null;
+  templateVersionId: string | null;
   notes: string | null;
 };
 
@@ -59,6 +60,17 @@ export class AttemptsService {
 
     const status = input.grade === 'fail' ? ('failed' as const) : ('draft' as const);
 
+    let templateVersionId: string | null = null;
+    if (input.templateVersionId) {
+      const tv = await this.prisma.templateVersion.findUnique({
+        where: { id: input.templateVersionId },
+        include: { template: { select: { isArchived: true } } },
+      });
+      if (!tv || tv.template.isArchived) throw new BadRequestException('Template version not found');
+      if (!tv.isActive) throw new BadRequestException('Template version is not active');
+      templateVersionId = tv.id;
+    }
+
     return this.prisma.examAttempt.create({
       data: {
         personId: person.id,
@@ -69,6 +81,7 @@ export class AttemptsService {
         status: status as any,
         signerUserId: input.signerUserId,
         createdById: input.createdById,
+        templateVersionId,
         notes: input.notes,
       },
       include: {

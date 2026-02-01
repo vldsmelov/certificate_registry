@@ -89,9 +89,23 @@ Extra internal endpoints (admin):
 Demo public verification link (bootstrapped):
 - `GET /certs/outer/demo-public-id-12345`
 
+### Iteration 4: Templates + PDF generation (internal only) + QR ✅
+
+- **Templates & versions**:
+  - `GET /template-versions/active` (JWT) — for selecting a template during attempt creation
+  - `GET /api/internal/templates` (JWT + `templates:manage`)
+  - `POST /api/internal/templates` (JWT + `templates:manage`)
+  - `POST /api/internal/templates/:templateId/versions` (multipart, JWT + `templates:manage`) — upload background + config JSON
+- **PDF generation** (no storage):
+  - `GET /api/internal/certs/:publicId/pdf` (JWT + `certificate:view_internal`) — generates PDF on demand
+  - PDF embeds a QR code leading to `PUBLIC_VERIFY_BASE_URL/certs/outer/:publicId`
+
+New env vars:
+- `TEMPLATE_STORAGE_DIR` — where template backgrounds are stored in the backend container (`/app/data/templates` by default)
+- `PUBLIC_VERIFY_BASE_URL` — base URL used for QR/verify links (default `http://localhost:3000`)
+
 ## Next iterations
 
-4) Templates (multiple templates + versions) + PDF generation on-demand (internal only) + QR linking to outer verify
 5) Export (CSV/XLSX) + advanced filters/search
 6) Notifications (Outbox + email provider)
 

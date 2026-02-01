@@ -23,6 +23,7 @@ export class BootstrapService implements OnModuleInit {
 
     const users = await this.bootstrapRbacAndUsers();
     await this.bootstrapExamTypes();
+    await this.bootstrapTemplates(users.adminUserId);
     await this.bootstrapDemoCertificate(users.adminUserId, users.signerUserId);
     await this.bootstrapDemoAttempt(users.creatorUserId, users.signerUserId);
   }
@@ -173,6 +174,62 @@ export class BootstrapService implements OnModuleInit {
     this.logger.log('Exam types ensured: DEMO, SAFE, FAID');
   }
 
+
+  private async bootstrapTemplates(adminUserId: string) {
+    // Create a default template + active version so we can generate PDFs out of the box
+    const defaultCfg = {
+      page: { orientation: 'landscape' },
+      fields: {
+        title: { x: 60, y: 530, size: 28 },
+        fullName: { x: 60, y: 430, size: 22 },
+        position: { x: 60, y: 390, size: 14 },
+        examTypeName: { x: 60, y: 360, size: 14 },
+        grade: { x: 60, y: 330, size: 14 },
+        certificateNumber: { x: 60, y: 300, size: 14 },
+        issuedAt: { x: 60, y: 270, size: 12 },
+        validTo: { x: 60, y: 245, size: 12 },
+        signerName: { x: 60, y: 200, size: 12 },
+        qr: { x: 670, y: 155, size: 150 },
+        verifyUrl: { x: 60, y: 120, size: 10 },
+      },
+    };
+
+    let template = await this.prisma.template.findFirst({ where: { name: 'Default Certificate Template' } });
+    if (!template) {
+      template = await this.prisma.template.create({
+        data: {
+          name: 'Default Certificate Template',
+          description: 'Demo template without background image (text-only).',
+          createdById: adminUserId,
+        },
+      });
+    }
+
+    let v1 = await this.prisma.templateVersion.findFirst({ where: { templateId: template.id, version: 1 } });
+    if (!v1) {
+      v1 = await this.prisma.templateVersion.create({
+        data: {
+          templateId: template.id,
+          version: 1,
+          isActive: true,
+          backgroundPath: null,
+          configJson: defaultCfg as any,
+          createdById: adminUserId,
+        },
+      });
+    } else if (!v1.isActive) {
+      v1 = await this.prisma.templateVersion.update({ where: { id: v1.id }, data: { isActive: true } });
+    }
+
+    // Set defaults for our demo exam types if missing
+    await this.prisma.examType.updateMany({
+      where: { code: { in: ['DEMO', 'SAFE', 'FAID'] }, defaultTemplateVersionId: null },
+      data: { defaultTemplateVersionId: v1.id },
+    });
+
+    this.logger.log('Default template ensured (v1 active)');
+  }
+
   private async bootstrapDemoCertificate(adminUserId: string, signerUserId: string) {
     const demoPublicId = 'demo-public-id-12345';
     const existing = await this.prisma.certificate.findUnique({ where: { publicId: demoPublicId } });
@@ -212,6 +269,7 @@ export class BootstrapService implements OnModuleInit {
         status: 'approved' as any,
         signerUserId,
         createdById: adminUserId,
+        templateVersionId: examType.defaultTemplateVersionId,
         notes: 'DEMO_CERT_ATTEMPT_V1',
       },
     });
@@ -227,6 +285,7 @@ export class BootstrapService implements OnModuleInit {
         validityMonths: examType.defaultValidityType === 'duration' ? examType.defaultValidityMonths : null,
         validFrom: issuedAt,
         validTo: null,
+        templateVersionId: examType.defaultTemplateVersionId,
         examAttemptId: attempt.id,
         renderSnapshotJson: {
           fullName: person.fullName,
@@ -242,6 +301,7 @@ export class BootstrapService implements OnModuleInit {
           validityType: examType.defaultValidityType,
           validityMonths: examType.defaultValidityType === 'duration' ? examType.defaultValidityMonths : null,
           signerName: null,
+          templateVersionId: examType.defaultTemplateVersionId,
         },
       },
     });

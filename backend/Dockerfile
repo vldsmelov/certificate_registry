@@ -4,13 +4,14 @@ WORKDIR /app
 
 # Install OS deps needed by Prisma engines
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && apt-get install -y --no-install-recommends openssl ca-certificates fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json ./
 COPY tsconfig*.json ./
 COPY nest-cli.json ./
 COPY prisma ./prisma
+COPY assets ./assets
 COPY src ./src
 
 RUN npm install

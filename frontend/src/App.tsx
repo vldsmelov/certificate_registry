@@ -8,6 +8,17 @@ type ExamType = { id: string; name: string; code: string };
 
 type UserListItem = { id: string; email: string; displayName: string | null };
 
+type TemplateVersionActive = {
+  id: string;
+  templateId: string;
+  templateName: string;
+  version: number;
+  backgroundPath: string | null;
+  configJson: any;
+};
+
+type TemplateAdmin = { id: string; name: string; description: string | null; isArchived: boolean; versions: any[] };
+
 type Attempt = {
   id: string;
   attemptNo: number;
@@ -41,6 +52,8 @@ type CertInternalView =
         revokedAt: string | null;
         revokeReason: string | null;
         revokedBy: string | null;
+        template?: { name: string; version: number } | null;
+        snapshot?: any;
       };
       attempt: any;
     };
@@ -83,6 +96,8 @@ export default function App() {
   const [users, setUsers] = useState<UserListItem[]>([]);
   const [attempts, setAttempts] = useState<Attempt[]>([]);
   const [approvals, setApprovals] = useState<ApprovalInboxItem[]>([]);
+  const [templateVersions, setTemplateVersions] = useState<TemplateVersionActive[]>([]);
+  const [templatesAdmin, setTemplatesAdmin] = useState<TemplateAdmin[]>([]);
 
   // UI errors
   const [actionErr, setActionErr] = useState<string | null>(null);
@@ -149,6 +164,18 @@ export default function App() {
       setUsers([]);
     }
 
+    apiFetch<TemplateVersionActive[]>('/template-versions/active')
+      .then(setTemplateVersions)
+      .catch(() => setTemplateVersions([]));
+
+    if (hasPerm(me, 'templates:manage')) {
+      apiFetch<TemplateAdmin[]>('/api/internal/templates')
+        .then(setTemplatesAdmin)
+        .catch(() => setTemplatesAdmin([]));
+    } else {
+      setTemplatesAdmin([]);
+    }
+
     // Mine attempts
     apiFetch<Attempt[]>('/attempts/mine')
       .then(setAttempts)
@@ -161,6 +188,8 @@ export default function App() {
         .catch(() => setApprovals([]));
     } else {
       setApprovals([]);
+    setTemplateVersions([]);
+    setTemplatesAdmin([]);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token, me?.id]);
@@ -195,6 +224,8 @@ export default function App() {
     setUsers([]);
     setAttempts([]);
     setApprovals([]);
+    setTemplateVersions([]);
+    setTemplatesAdmin([]);
   }
 
   async function refreshMine() {
@@ -220,6 +251,7 @@ export default function App() {
   const [position, setPosition] = useState('Техник');
   const [employeeCode, setEmployeeCode] = useState('E100');
   const [examTypeId, setExamTypeId] = useState('');
+  const [templateVersionId, setTemplateVersionId] = useState('');
   const [grade, setGrade] = useState<'gold' | 'silver' | 'fail'>('gold');
   const [examDate, setExamDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [signerUserId, setSignerUserId] = useState('');
@@ -252,6 +284,7 @@ export default function App() {
           grade,
           examDate,
           signerUserId: signerUserId || null,
+          templateVersionId: templateVersionId || null,
           notes: notes || null,
         }),
       });
@@ -370,6 +403,102 @@ export default function App() {
     }
   }
 
+
+  async function downloadPdf(publicId: string) {
+    setActionErr(null);
+    try {
+      const res = await fetch(`${apiUrl}/api/internal/certs/${publicId}/pdf`, {
+        method: 'GET',
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  // Templates admin
+  const [tplName, setTplName] = useState('New Template');
+  const [tplDesc, setTplDesc] = useState('');
+  const [tplVerTemplateId, setTplVerTemplateId] = useState('');
+  const [tplVerConfig, setTplVerConfig] = useState(
+    JSON.stringify(
+      {
+        page: { orientation: 'landscape' },
+        fields: {
+          title: { x: 60, y: 530, size: 28 },
+          fullName: { x: 60, y: 430, size: 22 },
+          position: { x: 60, y: 390, size: 14 },
+          examTypeName: { x: 60, y: 360, size: 14 },
+          grade: { x: 60, y: 330, size: 14 },
+          certificateNumber: { x: 60, y: 300, size: 14 },
+          issuedAt: { x: 60, y: 270, size: 12 },
+          validTo: { x: 60, y: 245, size: 12 },
+          signerName: { x: 60, y: 200, size: 12 },
+          qr: { x: 670, y: 155, size: 150 },
+          verifyUrl: { x: 60, y: 120, size: 10 },
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  const [tplVerFile, setTplVerFile] = useState<File | null>(null);
+
+  async function refreshTemplatesAdmin() {
+    if (!token || !hasPerm(me, 'templates:manage')) return;
+    try {
+      setTemplatesAdmin(await apiFetch<TemplateAdmin[]>('/api/internal/templates'));
+      setTemplateVersions(await apiFetch<TemplateVersionActive[]>('/template-versions/active'));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function createTemplateAdmin() {
+    setActionErr(null);
+    try {
+      await apiFetch('/api/internal/templates', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: tplName, description: tplDesc || null }),
+      });
+      flashOk('Шаблон создан');
+      await refreshTemplatesAdmin();
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  async function createTemplateVersionAdmin() {
+    if (!tplVerTemplateId) {
+      setActionErr('Выберите шаблон');
+      return;
+    }
+    setActionErr(null);
+    try {
+      const fd = new FormData();
+      fd.append('configJson', tplVerConfig);
+      fd.append('isActive', 'true');
+      if (tplVerFile) fd.append('background', tplVerFile);
+
+      const res = await fetch(`${apiUrl}/api/internal/templates/${tplVerTemplateId}/versions`, {
+        method: 'POST',
+        headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: fd,
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      flashOk('Версия шаблона создана');
+      setTplVerFile(null);
+      await refreshTemplatesAdmin();
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
   return (
     <div style={{ fontFamily: 'system-ui, sans-serif', padding: 24, maxWidth: 980 }}>
       <h1>Реестр сертификатов — прототип</h1>
@@ -470,6 +599,18 @@ export default function App() {
                 </select>
               </label>
               <label>
+                Шаблон сертификата (опционально)
+                <select value={templateVersionId} onChange={(e) => setTemplateVersionId(e.target.value)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
+                  <option value="">(по умолчанию для типа экзамена)</option>
+                  {templateVersions.map((tv) => (
+                    <option key={tv.id} value={tv.id}>
+                      {tv.templateName} v{tv.version}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label>
                 Оценка
                 <select value={grade} onChange={(e) => setGrade(e.target.value as any)} style={{ width: '100%', padding: 8, marginTop: 4 }}>
                   <option value="gold">Gold</option>
@@ -511,6 +652,49 @@ export default function App() {
               </div>
               <div style={{ fontSize: 13, opacity: 0.8 }}>
                 Подсказка: при старте backend уже создаётся demo draft attempt (marker <code>DEMO_ATTEMPT_V1</code>), который можно отправить на подпись.
+              </div>
+            </div>
+          </section>
+        )}
+
+
+        {token && me && hasPerm(me, 'templates:manage') && (
+          <section style={{ background: '#f6f8fa', padding: 12, borderRadius: 10 }}>
+            <h2 style={{ marginTop: 0 }}>Управление шаблонами</h2>
+            <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 10 }}>
+              <button onClick={refreshTemplatesAdmin} style={{ padding: '8px 12px' }}>Обновить</button>
+            </div>
+
+            <div style={{ display: 'grid', gap: 10, maxWidth: 740 }}>
+              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Создать шаблон</div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <input value={tplName} onChange={(e) => setTplName(e.target.value)} placeholder="Название" style={{ padding: 8 }} />
+                  <input value={tplDesc} onChange={(e) => setTplDesc(e.target.value)} placeholder="Описание (опц.)" style={{ padding: 8 }} />
+                  <button onClick={createTemplateAdmin} style={{ padding: '8px 12px', width: 'fit-content' }}>Создать</button>
+                </div>
+              </div>
+
+              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Создать версию (активную)</div>
+                <div style={{ display: 'grid', gap: 8 }}>
+                  <select value={tplVerTemplateId} onChange={(e) => setTplVerTemplateId(e.target.value)} style={{ padding: 8 }}>
+                    <option value="">(выберите шаблон)</option>
+                    {templatesAdmin.map((tpl) => (
+                      <option key={tpl.id} value={tpl.id}>
+                        {tpl.name}
+                      </option>
+                    ))}
+                  </select>
+                  <textarea value={tplVerConfig} onChange={(e) => setTplVerConfig(e.target.value)} rows={10} style={{ padding: 8, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }} />
+                  <input type="file" accept="image/png,image/jpeg" onChange={(e) => setTplVerFile(e.target.files?.[0] ?? null)} />
+                  <button onClick={createTemplateVersionAdmin} style={{ padding: '8px 12px', width: 'fit-content' }}>Загрузить версию</button>
+                </div>
+              </div>
+
+              <div style={{ background: '#fff', padding: 12, borderRadius: 8 }}>
+                <div style={{ fontWeight: 600, marginBottom: 8 }}>Список</div>
+                <pre style={{ margin: 0, whiteSpace: 'pre-wrap' }}>{JSON.stringify(templatesAdmin, null, 2)}</pre>
               </div>
             </div>
           </section>
@@ -595,6 +779,7 @@ export default function App() {
             <h2 style={{ marginTop: 0 }}>Просмотр сертификата</h2>
             <div style={{ marginBottom: 10, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <button onClick={() => openCert(selectedCertPublicId)} style={{ padding: '8px 12px' }}>Обновить</button>
+              <button onClick={() => downloadPdf(selectedCertPublicId)} style={{ padding: '8px 12px' }}>Скачать PDF</button>
               <a
                 href={`${apiUrl}/certs/outer/${selectedCertPublicId}`}
                 target="_blank"

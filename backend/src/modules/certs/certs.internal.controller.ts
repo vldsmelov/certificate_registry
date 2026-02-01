@@ -1,14 +1,19 @@
-import { Body, Controller, Get, Param, Post, HttpException, HttpStatus, UseGuards, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards, Req, Res, InternalServerErrorException } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { PermissionsGuard } from '../rbac/permissions.guard';
 import { RequirePermissions } from '../rbac/permissions.decorator';
 import { CertificatesService } from '../certificates/certificates.service';
+import { PdfRendererService } from '../certificates/pdf-renderer.service';
+import { Response } from 'express';
 
 @Controller()
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @RequirePermissions('certificate:view_internal')
 export class CertsInternalController {
-  constructor(private readonly certificates: CertificatesService) {}
+  constructor(
+    private readonly certificates: CertificatesService,
+    private readonly renderer: PdfRendererService,
+  ) {}
 
   // Internal contour: full view (later: auth + RBAC)
   @Get('/certs/inner/:publicId')
@@ -30,12 +35,19 @@ export class CertsInternalController {
     return this.certificates.setRevocation(publicId, userId, 'annulled', body?.reason ?? null);
   }
 
-  // Internal PDF: on-demand generation (placeholder in scaffold)
+  // Internal PDF: on-demand generation (no storage)
   @Get('/api/internal/certs/:publicId/pdf')
-  async pdf(@Param('publicId') _publicId: string) {
-    throw new HttpException(
-      'PDF generation is not implemented in scaffold. Will be added in a later iteration.',
-      HttpStatus.NOT_IMPLEMENTED,
-    );
+  async pdf(@Param('publicId') publicId: string, @Res() res: Response) {
+    try {
+      const { buffer, filename } = await this.renderer.renderCertificatePdf(publicId);
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `inline; filename="${filename}"`);
+      res.send(buffer);
+    } catch (e: any) {
+      const isDev = (process.env.NODE_ENV || 'development') !== 'production';
+      const detail = isDev ? (e?.message ?? String(e)) : undefined;
+      throw new InternalServerErrorException({ message: 'PDF render failed', detail });
+    }
   }
 }

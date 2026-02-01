@@ -10,6 +10,7 @@ import { ExamTypesModule } from '../exam-types/exam-types.module';
 import { AttemptsModule } from '../attempts/attempts.module';
 import { ApprovalsModule } from '../approvals/approvals.module';
 import { CertificatesModule } from '../certificates/certificates.module';
+import { TemplatesModule } from '../templates/templates.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { CertificatesModule } from '../certificates/certificates.module';
     ExamTypesModule,
     AttemptsModule,
     ApprovalsModule,
+    TemplatesModule,
   ],
   controllers: [HealthController, CertsPublicController, CertsInternalController],
 })

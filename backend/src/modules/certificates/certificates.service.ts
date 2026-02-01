@@ -68,6 +68,8 @@ export class CertificatesService {
 
     const signerName = attempt.signerUser?.displayName ?? attempt.signerUser?.email ?? null;
 
+    const templateVersionId = attempt.templateVersionId ?? attempt.examType.defaultTemplateVersionId ?? null;
+
     const renderSnapshotJson = {
       fullName: attempt.person.fullName,
       position: attempt.person.position,
@@ -82,6 +84,7 @@ export class CertificatesService {
       validityType,
       validityMonths,
       signerName,
+      templateVersionId,
       issuedByUserId,
     };
 
@@ -97,6 +100,7 @@ export class CertificatesService {
         validFrom: issuedAt,
         validTo,
         renderSnapshotJson,
+        templateVersionId: templateVersionId ?? undefined,
         examAttemptId: attempt.id,
       },
     });
@@ -147,6 +151,11 @@ export class CertificatesService {
     const cert = await this.prisma.certificate.findUnique({
       where: { publicId },
       include: {
+        templateVersion: {
+          include: {
+            template: true,
+          },
+        },
         examAttempt: {
           include: {
             person: true,
@@ -181,6 +190,7 @@ export class CertificatesService {
         revokedAt: cert.revokedAt,
         revokeReason: cert.revokeReason,
         revokedBy: cert.revokedBy ? (cert.revokedBy.displayName ?? cert.revokedBy.email) : null,
+        template: cert.templateVersion ? { name: cert.templateVersion.template.name, version: cert.templateVersion.version } : null,
         snapshot: snap,
       },
       attempt: cert.examAttempt

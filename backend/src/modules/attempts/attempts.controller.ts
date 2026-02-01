@@ -37,6 +37,7 @@ export class AttemptsController {
     const grade = String(body.grade ?? '').trim();
     const examDate = body.examDate ? new Date(body.examDate) : new Date();
     const signerUserId = body.signerUserId ? String(body.signerUserId).trim() : null;
+    const templateVersionId = body.templateVersionId ? String(body.templateVersionId).trim() : null;
     const notes = body.notes ? String(body.notes).trim() : null;
 
     if (!fullName) throw new BadRequestException('fullName is required');
@@ -52,6 +53,7 @@ export class AttemptsController {
       grade: grade as any,
       examDate,
       signerUserId,
+      templateVersionId,
       notes,
     });
   }

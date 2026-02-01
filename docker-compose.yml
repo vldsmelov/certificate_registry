@@ -30,11 +30,17 @@ services:
       CREATOR_PASSWORD: ${CREATOR_PASSWORD}
       SIGNER_EMAIL: ${SIGNER_EMAIL}
       SIGNER_PASSWORD: ${SIGNER_PASSWORD}
+      TEMPLATE_STORAGE_DIR: ${TEMPLATE_STORAGE_DIR:-/app/data/templates}
+      PUBLIC_VERIFY_BASE_URL: ${PUBLIC_VERIFY_BASE_URL:-http://localhost:3000}
+      PDF_FONT_PATH: ${PDF_FONT_PATH:-/app/assets/fonts/DejaVuSans.ttf}
+      NODE_ENV: ${NODE_ENV:-development}
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "${BACKEND_PORT}:3000"
+    volumes:
+      - backend_data:/app/data
     restart: unless-stopped
 
   frontend:
@@ -64,6 +70,12 @@ services:
       CREATOR_PASSWORD: ${CREATOR_PASSWORD}
       SIGNER_EMAIL: ${SIGNER_EMAIL}
       SIGNER_PASSWORD: ${SIGNER_PASSWORD}
+      TEMPLATE_STORAGE_DIR: ${TEMPLATE_STORAGE_DIR:-/app/data/templates}
+      PUBLIC_VERIFY_BASE_URL: ${PUBLIC_VERIFY_BASE_URL:-http://localhost:3000}
+      PDF_FONT_PATH: ${PDF_FONT_PATH:-/app/assets/fonts/DejaVuSans.ttf}
+      NODE_ENV: ${NODE_ENV:-development}
+    volumes:
+      - backend_data:/app/data
     depends_on:
       db:
         condition: service_healthy
@@ -71,3 +83,4 @@ services:
 
 volumes:
   db_data:
+  backend_data:
