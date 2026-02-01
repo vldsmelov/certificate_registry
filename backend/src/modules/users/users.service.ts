@@ -26,4 +26,12 @@ export class UsersService {
     const permissions = await this.rbac.getUserPermissions(user.id);
     return { id: user.id, email: user.email, displayName: user.displayName ?? null, permissions };
   }
+
+  async listUsers() {
+    return this.prisma.appUser.findMany({
+      where: { isActive: true },
+      orderBy: { email: 'asc' },
+      select: { id: true, email: true, displayName: true },
+    });
+  }
 }

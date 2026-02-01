@@ -19,6 +19,21 @@ enum CertificateStatus {
   annulled
 }
 
+enum AttemptStatus {
+  draft
+  submitted
+  needs_fix
+  approved
+  rejected
+  failed
+}
+
+enum ApprovalStatus {
+  pending
+  approved
+  rejected
+}
+
 model AppUser {
   id           String   @id @default(uuid())
   email        String   @unique
@@ -27,7 +42,10 @@ model AppUser {
   isActive     Boolean  @default(true)
   createdAt    DateTime @default(now())
 
-  roles        UserRole[]
+  roles          UserRole[]
+  createdAttempts ExamAttempt[] @relation("AttemptCreator")
+  signingAttempts ExamAttempt[] @relation("AttemptSigner")
+  approvals       Approval[]    @relation("ApprovalSigner")
 }
 
 model Role {
@@ -74,11 +92,13 @@ model RolePermission {
 }
 
 model Person {
-  id        String   @id @default(uuid())
-  fullName  String
-  position  String
-  createdAt DateTime @default(now())
+  id           String   @id @default(uuid())
+  fullName     String
+  position     String
+  employeeCode String?  @unique
+  createdAt    DateTime @default(now())
 
+  attempts     ExamAttempt[]
   certificates Certificate[]
 }
 
@@ -88,7 +108,53 @@ model ExamType {
   code      String   @unique
   createdAt DateTime @default(now())
 
+  attempts     ExamAttempt[]
   certificates Certificate[]
+}
+
+model ExamAttempt {
+  id           String        @id @default(uuid())
+  personId     String
+  examTypeId   String
+  attemptNo    Int
+  grade        Grade
+  examDate     DateTime      @default(now())
+  status       AttemptStatus @default(draft)
+  signerUserId String?
+  createdById  String
+  notes        String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  person      Person   @relation(fields: [personId], references: [id], onDelete: Restrict)
+  examType    ExamType @relation(fields: [examTypeId], references: [id], onDelete: Restrict)
+  createdBy   AppUser  @relation("AttemptCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  signerUser  AppUser? @relation("AttemptSigner", fields: [signerUserId], references: [id], onDelete: SetNull)
+
+  approvals   Approval[]
+  certificate Certificate?
+
+  @@unique([personId, examTypeId, attemptNo])
+  @@index([status])
+  @@index([signerUserId])
+  @@index([createdById])
+  @@index([examDate])
+}
+
+model Approval {
+  id            String         @id @default(uuid())
+  examAttemptId String
+  signerUserId  String
+  status        ApprovalStatus @default(pending)
+  reason        String?
+  decidedAt     DateTime?
+  createdAt     DateTime       @default(now())
+
+  examAttempt ExamAttempt @relation(fields: [examAttemptId], references: [id], onDelete: Cascade)
+  signerUser  AppUser     @relation("ApprovalSigner", fields: [signerUserId], references: [id], onDelete: Restrict)
+
+  @@index([signerUserId, status])
+  @@index([examAttemptId])
 }
 
 model Certificate {
@@ -102,14 +168,19 @@ model Certificate {
   validFrom         DateTime          @default(now())
   validTo           DateTime?
 
-  // For later: snapshot for deterministic PDF render
+  // For deterministic PDF render (internal only)
   renderSnapshotJson Json?
 
+  // Legacy links (kept for demo + transition)
   personId          String?
   person            Person?           @relation(fields: [personId], references: [id], onDelete: SetNull)
 
   examTypeId        String?
   examType          ExamType?         @relation(fields: [examTypeId], references: [id], onDelete: SetNull)
+
+  // Future: certificate belongs to an attempt
+  examAttemptId     String?           @unique
+  examAttempt       ExamAttempt?      @relation(fields: [examAttemptId], references: [id], onDelete: SetNull)
 
   createdAt         DateTime          @default(now())
 

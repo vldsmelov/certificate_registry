@@ -2,6 +2,12 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '../prisma/prisma.service';
 
+type SeedUsers = {
+  adminUserId: string;
+  creatorUserId: string;
+  signerUserId: string;
+};
+
 @Injectable()
 export class BootstrapService implements OnModuleInit {
   private readonly logger = new Logger(BootstrapService.name);
@@ -15,12 +21,77 @@ export class BootstrapService implements OnModuleInit {
       return;
     }
 
-    await this.bootstrapRbac();
+    const users = await this.bootstrapRbacAndUsers();
+    await this.bootstrapExamTypes();
     await this.bootstrapDemoCertificate();
+    await this.bootstrapDemoAttempt(users.creatorUserId, users.signerUserId);
   }
 
-  private async bootstrapRbac() {
-    const permissions = [
+  private async ensurePermission(code: string, description?: string) {
+    await this.prisma.permission.upsert({
+      where: { code },
+      update: { description: description ?? undefined },
+      create: { code, description },
+    });
+  }
+
+  private async ensureRoleWithPermissions(roleCode: string, roleName: string, permissionCodes: string[]) {
+    const role = await this.prisma.role.upsert({
+      where: { code: roleCode },
+      update: { name: roleName },
+      create: { code: roleCode, name: roleName },
+    });
+
+    const perms = await this.prisma.permission.findMany({
+      where: { code: { in: permissionCodes } },
+      select: { id: true },
+    });
+
+    for (const p of perms) {
+      await this.prisma.rolePermission.upsert({
+        where: { roleId_permissionId: { roleId: role.id, permissionId: p.id } },
+        update: {},
+        create: { roleId: role.id, permissionId: p.id },
+      });
+    }
+
+    return role;
+  }
+
+  private async ensureUser(emailRaw: string, password: string, displayName: string, roleCodes: string[]) {
+    const email = emailRaw.trim().toLowerCase();
+    const existing = await this.prisma.appUser.findUnique({ where: { email } });
+
+    let userId: string;
+    if (!existing) {
+      const passwordHash = await bcrypt.hash(password, 10);
+      const user = await this.prisma.appUser.create({
+        data: { email, passwordHash, displayName, isActive: true },
+      });
+      userId = user.id;
+      this.logger.log(`Created user: ${email} (password: ${password})`);
+    } else {
+      await this.prisma.appUser.update({ where: { id: existing.id }, data: { isActive: true, displayName } });
+      userId = existing.id;
+      this.logger.log(`User exists: ${email}`);
+    }
+
+    for (const roleCode of roleCodes) {
+      const role = await this.prisma.role.findUnique({ where: { code: roleCode } });
+      if (!role) continue;
+      await this.prisma.userRole.upsert({
+        where: { userId_roleId: { userId, roleId: role.id } },
+        update: {},
+        create: { userId, roleId: role.id },
+      });
+    }
+
+    return userId;
+  }
+
+  private async bootstrapRbacAndUsers(): Promise<SeedUsers> {
+    // Permissions catalog (MVP + planned)
+    const permissionCodes = [
       'exam:create',
       'exam:edit_own',
       'exam:submit',
@@ -31,49 +102,64 @@ export class BootstrapService implements OnModuleInit {
       'certificate:view_internal',
       'export:run',
       'templates:manage',
+      'users:read',
       'users:manage',
     ];
 
-    for (const code of permissions) {
-      await this.prisma.permission.upsert({ where: { code }, update: {}, create: { code } });
+    for (const code of permissionCodes) {
+      await this.ensurePermission(code);
     }
 
-    const adminRole = await this.prisma.role.upsert({
-      where: { code: 'admin' },
-      update: {},
-      create: { code: 'admin', name: 'Admin' },
-    });
+    // Roles
+    await this.ensureRoleWithPermissions('admin', 'Admin', permissionCodes);
+    await this.ensureRoleWithPermissions('creator', 'Creator', [
+      'exam:create',
+      'exam:edit_own',
+      'exam:submit',
+      'users:read',
+    ]);
+    await this.ensureRoleWithPermissions('signer', 'Signer', [
+      'approval:review',
+      'approval:approve',
+      'approval:reject',
+      'approval:bulk_action',
+    ]);
 
-    const allPerms = await this.prisma.permission.findMany({ select: { id: true } });
-    for (const p of allPerms) {
-      await this.prisma.rolePermission.upsert({
-        where: { roleId_permissionId: { roleId: adminRole.id, permissionId: p.id } },
-        update: {},
-        create: { roleId: adminRole.id, permissionId: p.id },
-      });
-    }
-
-    const adminEmail = (process.env.ADMIN_EMAIL || 'admin@example.com').trim().toLowerCase();
+    // Users (dev)
+    const adminEmail = process.env.ADMIN_EMAIL || 'admin@example.com';
     const adminPassword = process.env.ADMIN_PASSWORD || 'admin123';
 
-    const existing = await this.prisma.appUser.findUnique({ where: { email: adminEmail } });
-    if (!existing) {
-      const passwordHash = await bcrypt.hash(adminPassword, 10);
-      const user = await this.prisma.appUser.create({
-        data: { email: adminEmail, passwordHash, displayName: 'Administrator', isActive: true },
-      });
-      await this.prisma.userRole.create({ data: { userId: user.id, roleId: adminRole.id } });
-      this.logger.log(`Created default admin user: ${adminEmail} (password: ${adminPassword})`);
-    } else {
-      // Ensure user is active and has admin role
-      await this.prisma.appUser.update({ where: { id: existing.id }, data: { isActive: true } });
-      await this.prisma.userRole.upsert({
-        where: { userId_roleId: { userId: existing.id, roleId: adminRole.id } },
-        update: {},
-        create: { userId: existing.id, roleId: adminRole.id },
-      });
-      this.logger.log(`Default admin user exists: ${adminEmail}`);
-    }
+    const creatorEmail = process.env.CREATOR_EMAIL || 'creator@example.com';
+    const creatorPassword = process.env.CREATOR_PASSWORD || 'creator123';
+
+    const signerEmail = process.env.SIGNER_EMAIL || 'signer@example.com';
+    const signerPassword = process.env.SIGNER_PASSWORD || 'signer123';
+
+    const adminUserId = await this.ensureUser(adminEmail, adminPassword, 'Administrator', ['admin']);
+    const creatorUserId = await this.ensureUser(creatorEmail, creatorPassword, 'Exam Creator', ['creator']);
+    const signerUserId = await this.ensureUser(signerEmail, signerPassword, 'Exam Signer', ['signer']);
+
+    return { adminUserId, creatorUserId, signerUserId };
+  }
+
+  private async bootstrapExamTypes() {
+    await this.prisma.examType.upsert({
+      where: { code: 'DEMO' },
+      update: {},
+      create: { name: 'Demo Exam', code: 'DEMO' },
+    });
+    await this.prisma.examType.upsert({
+      where: { code: 'SAFE' },
+      update: {},
+      create: { name: 'Safety Basics', code: 'SAFE' },
+    });
+    await this.prisma.examType.upsert({
+      where: { code: 'FAID' },
+      update: {},
+      create: { name: 'First Aid', code: 'FAID' },
+    });
+
+    this.logger.log('Exam types ensured: DEMO, SAFE, FAID');
   }
 
   private async bootstrapDemoCertificate() {
@@ -84,14 +170,11 @@ export class BootstrapService implements OnModuleInit {
       return;
     }
 
-    const examType = await this.prisma.examType.upsert({
-      where: { code: 'DEMO' },
-      update: {},
-      create: { name: 'Demo Exam', code: 'DEMO' },
-    });
+    const examType = await this.prisma.examType.findUnique({ where: { code: 'DEMO' } });
+    if (!examType) return;
 
     const person = await this.prisma.person.create({
-      data: { fullName: 'Иванов Иван Иванович', position: 'Инженер' },
+      data: { fullName: 'Иванов Иван Иванович', position: 'Инженер', employeeCode: 'DEMO-001' },
     });
 
     await this.prisma.certificate.create({
@@ -118,5 +201,39 @@ export class BootstrapService implements OnModuleInit {
     });
 
     this.logger.log('Created demo certificate: /certs/outer/demo-public-id-12345');
+  }
+
+  private async bootstrapDemoAttempt(creatorUserId: string, signerUserId: string) {
+    const marker = 'DEMO_ATTEMPT_V1';
+    const existing = await this.prisma.examAttempt.findFirst({ where: { notes: marker } });
+    if (existing) {
+      this.logger.log('Demo attempt exists');
+      return;
+    }
+
+    const examType = await this.prisma.examType.findUnique({ where: { code: 'SAFE' } });
+    if (!examType) return;
+
+    const person = await this.prisma.person.upsert({
+      where: { employeeCode: 'E100' },
+      update: { fullName: 'Петров Пётр Петрович', position: 'Техник' },
+      create: { fullName: 'Петров Пётр Петрович', position: 'Техник', employeeCode: 'E100' },
+    });
+
+    await this.prisma.examAttempt.create({
+      data: {
+        personId: person.id,
+        examTypeId: examType.id,
+        attemptNo: 1,
+        grade: 'gold',
+        examDate: new Date(),
+        status: 'draft',
+        signerUserId,
+        createdById: creatorUserId,
+        notes: marker,
+      },
+    });
+
+    this.logger.log('Created demo attempt for workflow (creator -> submit -> signer inbox)');
   }
 }

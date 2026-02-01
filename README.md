@@ -25,39 +25,52 @@ docker compose up --build
 - Frontend: http://localhost:5173
 - Backend health: http://localhost:3000/health
 
-4) Login (Iteration 1):
-- By default the backend bootstraps a dev admin on startup (see `.env`):
-  - email: `admin@example.com`
-  - password: `admin123`
-- Login endpoint: `POST /auth/login`
-- Current user endpoint: `GET /auth/me` (Bearer token)
+## Dev users (bootstrapped on startup)
 
-If `backend` starts before `db` is ready, it will retry Prisma connect automatically (compose also uses a healthcheck).
+If `DEV_BOOTSTRAP=true`, the backend creates default users and demo data idempotently:
 
-## What is implemented in this scaffold
+- **Admin**: `admin@example.com / admin123`
+- **Creator (enters exam attempts)**: `creator@example.com / creator123`
+- **Signer (approves/rejects)**: `signer@example.com / signer123`
+
+Credentials can be changed in `.env`.
+
+## What is implemented
 
 - Working docker-compose with DB + backend + frontend
 - Backend `/health` endpoint checks DB connectivity
-- Basic DB schema + migration (Prisma migrate deploy)
-- Placeholder routes for future:
-  - Public verify: `/certs/outer/:publicId`
-  - Internal view: `/certs/inner/:publicId`
-  - Internal PDF stream: `/api/internal/certs/:publicId/pdf` (returns 501 for now)
+- Public verify route:
+  - `GET /certs/outer/:publicId` (no auth, no personal data)
+- Internal view route:
+  - `GET /certs/inner/:publicId` (JWT + `certificate:view_internal`)
 
-### Iteration 1: JWT + RBAC (verifiable)
+### Iteration 1: JWT + RBAC ✅
 
 - `POST /auth/login` issues JWT
 - `GET /auth/me` returns current user + permissions
-- Internal contour is protected:
-  - `/certs/inner/:publicId` now requires JWT + `certificate:view_internal` permission
-- Public contour remains open:
-  - `/certs/outer/:publicId`
+- Internal contour is protected via `PermissionsGuard`
 
-## Next iterations (we will implement step-by-step with verifiable results)
+### Iteration 2: Exam attempts + approvals (verifiable) ✅
 
-1) Auth (JWT) + RBAC permissions + bootstrapped admin ✅
-2) Exam attempts (create/submit) + approvals inbox + bulk approve/reject
-3) Certificate issuance (number + public_id) + validity (fixed/duration/perpetual) + public verify status
+- **Exam types** (for dropdown):
+  - `GET /exam-types` (JWT)
+- **Users list** (for choosing signer):
+  - `GET /users` (JWT + `users:read`)
+- **Attempts**:
+  - `GET /attempts/mine` (JWT)
+  - `POST /attempts` (JWT + `exam:create`)
+  - `POST /attempts/:id/submit` (JWT + `exam:submit`)
+- **Approvals**:
+  - `GET /approvals/inbox` (JWT + `approval:review`)
+  - `POST /approvals/:id/approve` (JWT + `approval:approve`)
+  - `POST /approvals/:id/reject` (JWT + `approval:reject`)
+  - `POST /approvals/bulk` (JWT + `approval:bulk_action`)
+
+The backend seeds a demo **draft** attempt (marker `DEMO_ATTEMPT_V1`) created by the **Creator**, assigned to the **Signer**.
+
+## Next iterations
+
+3) Certificate issuance (number + validity) + public verify statuses
 4) Templates (multiple templates + versions) + PDF generation on-demand (internal only) + QR linking to outer verify
 5) Export (CSV/XLSX) + advanced filters/search
 6) Notifications (Outbox + email provider)
@@ -66,4 +79,3 @@ If `backend` starts before `db` is ready, it will retry Prisma connect automatic
 
 - No PDF files are stored. Certificates will be generated on demand in the internal contour.
 - Public contour exposes only validity status (no personal data).
-
