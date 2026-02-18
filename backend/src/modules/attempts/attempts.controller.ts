@@ -4,6 +4,7 @@ import {
   Controller,
   Get,
   Param,
+  Patch,
   Post,
   UseGuards,
 } from '@nestjs/common';
@@ -58,6 +59,45 @@ export class AttemptsController {
     });
   }
 
+
+
+  @Patch('/:id')
+  @RequirePermissions('exam:edit_own')
+  async update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
+    const fullName = String(body.fullName ?? '').trim();
+    const position = String(body.position ?? '').trim();
+    const employeeCode = body.employeeCode ? String(body.employeeCode).trim() : null;
+    const examTypeId = String(body.examTypeId ?? '').trim();
+    const grade = String(body.grade ?? '').trim();
+    const examDate = body.examDate ? new Date(body.examDate) : new Date();
+    const signerUserId = body.signerUserId ? String(body.signerUserId).trim() : null;
+    const templateVersionId = body.templateVersionId ? String(body.templateVersionId).trim() : null;
+    const notes = body.notes ? String(body.notes).trim() : null;
+
+    if (!fullName) throw new BadRequestException('fullName is required');
+    if (!position) throw new BadRequestException('position is required');
+    if (!examTypeId) throw new BadRequestException('examTypeId is required');
+    if (!['gold', 'silver', 'fail'].includes(grade)) throw new BadRequestException('grade must be gold|silver|fail');
+    if (Number.isNaN(examDate.getTime())) throw new BadRequestException('examDate is invalid');
+
+    return this.service.updateAttempt({
+      attemptId: id,
+      userId: user.id,
+      person: { fullName, position, employeeCode },
+      examTypeId,
+      grade: grade as any,
+      examDate,
+      signerUserId,
+      templateVersionId,
+      notes,
+    });
+  }
+
+  @Post('/:id/withdraw')
+  @RequirePermissions('exam:withdraw')
+  async withdraw(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.service.withdrawAttempt({ attemptId: id, userId: user.id });
+  }
   @Post('/:id/submit')
   @RequirePermissions('exam:submit')
   async submit(@CurrentUser() user: AuthUser, @Param('id') id: string) {

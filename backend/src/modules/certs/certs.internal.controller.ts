@@ -45,6 +45,7 @@ export class CertsInternalController {
       fullName?: string;
       position?: string;
       employeeCode?: string | null;
+      grade?: 'gold' | 'silver';
       validityType?: 'fixed_date' | 'duration' | 'perpetual';
       validityMonths?: number | null;
       validTo?: string | null;

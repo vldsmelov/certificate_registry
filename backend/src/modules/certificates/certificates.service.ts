@@ -335,6 +335,7 @@ export class CertificatesService {
     fullName?: string;
     position?: string;
     employeeCode?: string | null;
+    grade?: 'gold' | 'silver';
     validityType?: 'fixed_date' | 'duration' | 'perpetual';
     validityMonths?: number | null;
     validTo?: string | null;
@@ -385,6 +386,8 @@ export class CertificatesService {
     const templateVersionId = payload.templateVersionId ?? cert.templateVersionId ?? null;
     const note = (payload.note ?? '').trim() || null;
 
+    const grade = (payload.grade ?? (cert.grade as any)) as any;
+
     // Update render snapshot (used for deterministic internal PDF)
     const snap: any = cert.renderSnapshotJson ?? {};
     const nextSnap = {
@@ -392,6 +395,7 @@ export class CertificatesService {
       fullName: payload.fullName ?? cert.examAttempt.person.fullName,
       position: payload.position ?? cert.examAttempt.person.position,
       employeeCode: payload.employeeCode === undefined ? cert.examAttempt.person.employeeCode : payload.employeeCode,
+      grade,
       validityType,
       validityMonths,
       validTo: validTo ? validTo.toISOString() : null,
@@ -412,12 +416,13 @@ export class CertificatesService {
         },
       });
 
-      // Update attempt template (if changed) and move back to submitted
+      // Update attempt template (if changed), grade, and move back to submitted
       await tx.examAttempt.update({
         where: { id: cert.examAttemptId },
         data: {
           status: 'submitted' as any,
           templateVersionId: templateVersionId ?? undefined,
+          grade: grade as any,
         },
       });
 
@@ -432,6 +437,7 @@ export class CertificatesService {
         where: { id: cert.id },
         data: {
           status: 'pending' as any,
+          grade: grade as any,
           validityType: validityType as any,
           validityMonths,
           validTo,

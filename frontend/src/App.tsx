@@ -29,7 +29,9 @@ type Attempt = {
   createdAt: string;
   person: { fullName: string; position: string; employeeCode: string | null };
   examType: { id: string; name: string; code: string };
+  signerUserId: string | null;
   signerUser: UserListItem | null;
+  templateVersionId: string | null;
   approvals: any[];
   certificate?: { publicId: string; certificateNumber: string; status: string; validTo: string | null } | null;
 };
@@ -148,6 +150,7 @@ export default function App() {
   const [certEditFullName, setCertEditFullName] = useState('');
   const [certEditPosition, setCertEditPosition] = useState('');
   const [certEditEmployeeCode, setCertEditEmployeeCode] = useState<string>('');
+  const [certEditGrade, setCertEditGrade] = useState<'gold' | 'silver'>('gold');
   const [certEditValidityType, setCertEditValidityType] = useState<'fixed_date' | 'duration' | 'perpetual'>('duration');
   const [certEditValidityMonths, setCertEditValidityMonths] = useState<number>(36);
   const [certEditValidTo, setCertEditValidTo] = useState<string>('');
@@ -420,6 +423,19 @@ function certStatusBadge(status: string, expired?: boolean) {
   const [signerUserId, setSignerUserId] = useState('');
   const [notes, setNotes] = useState('');
 
+  // Attempt edit modal (draft/needs_fix)
+  const [attemptEditOpen, setAttemptEditOpen] = useState(false);
+  const [attemptEdit, setAttemptEdit] = useState<Attempt | null>(null);
+  const [attemptEditFullName, setAttemptEditFullName] = useState('');
+  const [attemptEditPosition, setAttemptEditPosition] = useState('');
+  const [attemptEditEmployeeCode, setAttemptEditEmployeeCode] = useState('');
+  const [attemptEditExamTypeId, setAttemptEditExamTypeId] = useState('');
+  const [attemptEditGrade, setAttemptEditGrade] = useState<'gold' | 'silver' | 'fail'>('gold');
+  const [attemptEditExamDate, setAttemptEditExamDate] = useState('');
+  const [attemptEditSignerUserId, setAttemptEditSignerUserId] = useState('');
+  const [attemptEditTemplateVersionId, setAttemptEditTemplateVersionId] = useState('');
+  const [attemptEditNotes, setAttemptEditNotes] = useState('');
+
   useEffect(() => {
     if (!examTypeId && examTypes.length > 0) setExamTypeId(examTypes[0].id);
   }, [examTypes, examTypeId]);
@@ -465,6 +481,67 @@ function certStatusBadge(status: string, expired?: boolean) {
       await apiFetch(`/attempts/${id}/submit`, { method: 'POST' });
       flashOk('Отправлено на подпись');
       await refreshMine();
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  function openAttemptEdit(a: Attempt) {
+    setAttemptEdit(a);
+    setAttemptEditFullName(a.person.fullName || '');
+    setAttemptEditPosition(a.person.position || '');
+    setAttemptEditEmployeeCode(a.person.employeeCode || '');
+    setAttemptEditExamTypeId(a.examType.id);
+    setAttemptEditGrade(a.grade);
+    setAttemptEditExamDate(toDateInputValue(a.examDate) || a.examDate?.slice(0, 10) || '');
+    setAttemptEditSignerUserId(a.signerUserId || a.signerUser?.id || '');
+    setAttemptEditTemplateVersionId(a.templateVersionId || '');
+    setAttemptEditNotes(a.notes || '');
+    setAttemptEditOpen(true);
+  }
+
+  function closeAttemptEdit() {
+    setAttemptEditOpen(false);
+    setAttemptEdit(null);
+  }
+
+  async function saveAttemptEdit() {
+    if (!attemptEdit) return;
+    setActionErr(null);
+    setActionOk(null);
+    try {
+      await apiFetch(`/attempts/${attemptEdit.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fullName: attemptEditFullName,
+          position: attemptEditPosition,
+          employeeCode: attemptEditEmployeeCode || null,
+          examTypeId: attemptEditExamTypeId,
+          grade: attemptEditGrade,
+          examDate: attemptEditExamDate,
+          signerUserId: attemptEditSignerUserId || null,
+          templateVersionId: attemptEditTemplateVersionId || null,
+          notes: attemptEditNotes || null,
+        }),
+      });
+      flashOk('Заявка обновлена');
+      closeAttemptEdit();
+      await refreshMine();
+    } catch (e: any) {
+      setActionErr(String(e?.message ?? e));
+    }
+  }
+
+  async function withdrawAttempt(id: string) {
+    if (!window.confirm('Отозвать заявку? Она исчезнет у подписанта и вернётся в черновики.')) return;
+    setActionErr(null);
+    setActionOk(null);
+    try {
+      await apiFetch(`/attempts/${id}/withdraw`, { method: 'POST' });
+      flashOk('Заявка отозвана (черновик)');
+      await refreshMine();
+      if (hasPerm(me, 'approval:review')) await refreshInbox();
     } catch (e: any) {
       setActionErr(String(e?.message ?? e));
     }
@@ -546,6 +623,12 @@ function certStatusBadge(status: string, expired?: boolean) {
     try {
       const data = await apiFetch<CertInternalView>(`/certs/inner/${publicId}`);
       setSelectedCert(data);
+      const canEdit = hasPerm(me, 'certificate:edit') && data?.status === 'ok' && ['issued', 'pending'].includes(String((data as any).certificate?.status));
+      if (canEdit) {
+        beginEditCert(data);
+      } else {
+        setCertEditMode(false);
+      }
     } catch (e: any) {
       setActionErr(String(e?.message ?? e));
     }
@@ -556,13 +639,15 @@ function certStatusBadge(status: string, expired?: boolean) {
     setCertEditMode(false);
   }
 
-  function beginEditCert() {
-    if (!selectedCert || selectedCert.status !== 'ok') return;
-    const c: any = selectedCert.certificate;
-    const p: any = selectedCert.attempt?.person ?? {};
+  function beginEditCert(data?: CertInternalView) {
+    const src = data ?? selectedCert;
+    if (!src || src.status !== 'ok') return;
+    const c: any = src.certificate;
+    const p: any = src.attempt?.person ?? {};
     setCertEditFullName(p.fullName ?? '');
     setCertEditPosition(p.position ?? '');
     setCertEditEmployeeCode(p.employeeCode ?? '');
+    setCertEditGrade((String(c.grade ?? 'gold') as any));
     setCertEditValidityType((c.validityType ?? 'duration') as any);
     setCertEditValidityMonths(Number(c.validityMonths ?? 36));
     setCertEditValidTo(toDateInputValue(c.validTo));
@@ -582,6 +667,7 @@ function certStatusBadge(status: string, expired?: boolean) {
         validityType: certEditValidityType,
         note: certEditNote.trim() ? certEditNote.trim() : null,
         templateVersionId: certEditTemplateVersionId ? certEditTemplateVersionId : null,
+        grade: certEditGrade,
       };
       if (certEditValidityType === 'duration') {
         payload.validityMonths = Number(certEditValidityMonths || 0);
@@ -1070,11 +1156,23 @@ function certStatusBadge(status: string, expired?: boolean) {
                                     )}
                                   </td>
                                   <td className="actions">
-                                    {hasPerm(me, 'exam:submit') && ['draft', 'needs_fix'].includes(a.status) && a.grade !== 'fail' && (
-                                      <button className="btn btn-primary" onClick={() => submitAttempt(a.id)} type="button">
-                                        Отправить на подпись
-                                      </button>
-                                    )}
+                                    <div className="row" style={{ justifyContent: 'flex-end' }}>
+                                      {hasPerm(me, 'exam:edit_own') && ['draft', 'needs_fix'].includes(a.status) && (
+                                        <button className="btn btn-ghost" onClick={() => openAttemptEdit(a)} type="button">
+                                          Редактировать
+                                        </button>
+                                      )}
+                                      {hasPerm(me, 'exam:withdraw') && a.status === 'submitted' && (
+                                        <button className="btn btn-danger" onClick={() => withdrawAttempt(a.id)} type="button">
+                                          Отозвать
+                                        </button>
+                                      )}
+                                      {hasPerm(me, 'exam:submit') && ['draft', 'needs_fix'].includes(a.status) && a.grade !== 'fail' && (
+                                        <button className="btn btn-primary" onClick={() => submitAttempt(a.id)} type="button">
+                                          Отправить на подпись
+                                        </button>
+                                      )}
+                                    </div>
                                   </td>
                                 </tr>
                               );
@@ -1084,6 +1182,117 @@ function certStatusBadge(status: string, expired?: boolean) {
                       </div>
                     )}
                   </section>
+
+                  {attemptEditOpen && attemptEdit && (
+                    <div
+                      className="modal-backdrop"
+                      onMouseDown={(e) => {
+                        if (e.target === e.currentTarget) closeAttemptEdit();
+                      }}
+                    >
+                      <div className="modal">
+                        <div className="modal-head">
+                          <div>
+                            <h2 style={{ margin: 0 }}>Редактирование заявки</h2>
+                            <div className="muted" style={{ marginTop: 4 }}>
+                              {attemptEdit ? `Попытка #${attemptEdit.attemptNo} • ${attemptEdit.examType.code}` : ''}
+                            </div>
+                          </div>
+                          <div className="row">
+                            <button className="btn" onClick={closeAttemptEdit} type="button">
+                              Закрыть
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="grid" style={{ gap: 12 }}>
+                          <div className="row" style={{ flexWrap: 'wrap' }}>
+                            <div className="field" style={{ flex: 2, minWidth: 260 }}>
+                              <label>ФИО</label>
+                              <input className="input" value={attemptEditFullName} onChange={(e) => setAttemptEditFullName(e.target.value)} />
+                            </div>
+                            <div className="field" style={{ flex: 2, minWidth: 220 }}>
+                              <label>Должность</label>
+                              <input className="input" value={attemptEditPosition} onChange={(e) => setAttemptEditPosition(e.target.value)} />
+                            </div>
+                            <div className="field" style={{ minWidth: 200 }}>
+                              <label>Код сотрудника</label>
+                              <input className="input" value={attemptEditEmployeeCode} onChange={(e) => setAttemptEditEmployeeCode(e.target.value)} placeholder="(опционально)" />
+                            </div>
+</div>
+
+                          <div className="row" style={{ flexWrap: 'wrap' }}>
+                            <div className="field" style={{ minWidth: 220 }}>
+                              <label>Тип экзамена</label>
+                              <select className="select" value={attemptEditExamTypeId} onChange={(e) => setAttemptEditExamTypeId(e.target.value)}>
+                                <option value="">(не выбрано)</option>
+                                {examTypes.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name} ({t.code})
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div className="field" style={{ minWidth: 180 }}>
+                              <label>Оценка</label>
+                              <select className="select" value={attemptEditGrade} onChange={(e) => setAttemptEditGrade(e.target.value as any)}>
+                                <option value="gold">Gold</option>
+                                <option value="silver">Silver</option>
+                                <option value="fail">Не сдал</option>
+                              </select>
+                            </div>
+                            <div className="field" style={{ minWidth: 180 }}>
+                              <label>Дата экзамена</label>
+                              <input className="input" type="date" value={attemptEditExamDate} onChange={(e) => setAttemptEditExamDate(e.target.value)} />
+                            </div>
+                            <div className="field" style={{ minWidth: 240 }}>
+                              <label>Подписант</label>
+                              <select className="select" value={attemptEditSignerUserId} onChange={(e) => setAttemptEditSignerUserId(e.target.value)}>
+                                <option value="">(не выбрано)</option>
+                                {users.map((u) => (
+                                  <option key={u.id} value={u.id}>
+                                    {u.displayName ?? u.email}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="row" style={{ flexWrap: 'wrap' }}>
+                            <div className="field" style={{ flex: 1, minWidth: 260 }}>
+                              <label>Шаблон</label>
+                              <select className="select" value={attemptEditTemplateVersionId} onChange={(e) => setAttemptEditTemplateVersionId(e.target.value)}>
+                                <option value="">(по умолчанию)</option>
+                                {templateVersions.map((tv) => (
+                                  <option key={tv.id} value={tv.id}>
+                                    {tv.templateName} v{tv.version}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="field">
+                            <label>Примечание</label>
+                            <textarea className="textarea" value={attemptEditNotes} onChange={(e) => setAttemptEditNotes(e.target.value)} />
+                          </div>
+
+                          <div className="row">
+                            <button className="btn btn-primary" onClick={saveAttemptEdit} type="button">
+                              Сохранить
+                            </button>
+                            <button className="btn" onClick={closeAttemptEdit} type="button">
+                              Отмена
+                            </button>
+                            <div className="muted" style={{ fontSize: 12 }}>
+                              Можно редактировать, пока заявка в статусе <b>draft</b> или <b>needs_fix</b>.
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                 </div>
               )}
 
@@ -1171,6 +1380,7 @@ function certStatusBadge(status: string, expired?: boolean) {
                       </div>
                     )}
                   </section>
+
                 </div>
               )}
 
@@ -1413,11 +1623,6 @@ function certStatusBadge(status: string, expired?: boolean) {
                             )}
 
                             <div className="row">
-                              {hasPerm(me, 'certificate:edit') && ['issued', 'pending'].includes(String(selectedCert.certificate.status)) && (
-                                <button className="btn btn-primary" onClick={beginEditCert} type="button">
-                                  Редактировать
-                                </button>
-                              )}
                               {hasPerm(me, 'certificate:revoke') && String(selectedCert.certificate.status) === 'issued' && (
                                 <>
                                   <button className="btn btn-danger" onClick={() => revokeCert(selectedCert.certificate.publicId, 'revoke')} type="button">
@@ -1450,6 +1655,13 @@ function certStatusBadge(status: string, expired?: boolean) {
                                       <label>Код сотрудника</label>
                                       <input className="input" value={certEditEmployeeCode} onChange={(e) => setCertEditEmployeeCode(e.target.value)} placeholder="(опционально)" />
                                     </div>
+                                    <div className="field" style={{ minWidth: 160 }}>
+                                      <label>Оценка</label>
+                                      <select className="select" value={certEditGrade} onChange={(e) => setCertEditGrade(e.target.value as any)}>
+                                        <option value="gold">Gold</option>
+                                        <option value="silver">Silver</option>
+                                      </select>
+                                    </div>
                                   </div>
 
                                   <div className="row">
@@ -1480,7 +1692,7 @@ function certStatusBadge(status: string, expired?: boolean) {
                                         </option>
                                         {templateVersions.map((tv) => (
                                           <option key={tv.id} value={tv.id}>
-                                            {tv.template.name} v{tv.version}
+                                            {tv.templateName} v{tv.version}
                                           </option>
                                         ))}
                                       </select>
@@ -1496,8 +1708,8 @@ function certStatusBadge(status: string, expired?: boolean) {
                                     <button className="btn btn-primary" onClick={saveCertEdit} type="button">
                                       Сохранить и отправить на подпись
                                     </button>
-                                    <button className="btn" onClick={() => setCertEditMode(false)} type="button">
-                                      Отмена
+                                    <button className="btn" onClick={() => beginEditCert()} type="button">
+                                      Сбросить
                                     </button>
                                     <div className="muted" style={{ fontSize: 12 }}>
                                       После сохранения статус станет <b>pending</b>, во внешнем контуре будет “в процессе согласования”.
@@ -1629,6 +1841,7 @@ function certStatusBadge(status: string, expired?: boolean) {
                       </div>
                     </div>
                   </section>
+
                 </div>
               )}
             </>
